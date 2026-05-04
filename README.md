@@ -4,10 +4,8 @@ X-MoFE is an explainable multimodal fusion architecture for emotion and sentimen
 which modality to trust on a per-sample basis, which cross-modal interactions drive a prediction, and whether
 those explanations are faithful to the model's actual sensitivity.
 
-> Project status: in active development. This repository is being upgraded from a preliminary preprint
-> ([`legacy/`](legacy/), [`paper/old/`](paper/old/)) into a new method paper. See
-> [`X-MoFE_Research_Project_Specification.md`](X-MoFE_Research_Project_Specification.md) for the full
-> research plan.
+> **Status:** the repository skeleton is in place; implementation is being built phase by phase. The
+> preliminary preprint code is preserved under [`legacy/`](legacy/).
 
 ---
 
@@ -31,7 +29,7 @@ those explanations are faithful to the model's actual sensitivity.
 
 ## Baselines
 
-- **Multimodal fusion**: MulT, Self-MM, MISA, Dynamic Fusion Graph (MAG-BERT as backup)
+- **Multimodal fusion**: MulT, Self-MM, MISA, Dynamic Fusion Graph
 - **VLM / MLLM (zero-/few-shot, inference only)**: Qwen2.5-VL, LLaVA-OneVision
 
 ---
@@ -40,31 +38,58 @@ those explanations are faithful to the model's actual sensitivity.
 
 ```
 .
-├── configs/         # Hydra/YAML configs (datasets, encoders, models, experiments, vlms)
-├── data/            # raw / interim / processed / external feature caches (gitignored)
+├── README.md
+├── LICENSE
+├── requirements.txt              # pip dependencies
+├── environment.yml               # conda environment
+├── pyproject.toml                # package metadata + ruff/black/mypy/pytest config
+├── setup.py                      # editable-install shim
+│
+├── configs/                      # YAML configs
+│   ├── datasets/
+│   ├── encoders/
+│   ├── models/
+│   ├── experiments/
+│   └── vlms/
+│
+├── data/                         # contents gitignored
+│   ├── raw/                      # raw downloads
+│   ├── interim/                  # intermediate artifacts
+│   ├── processed/                # cached encoder features
+│   └── external/                 # third-party assets
+│
 ├── src/
-│   ├── data/             # dataset loading
-│   ├── encoders/         # frozen ModernBERT / WavLM / VideoMAEv2 wrappers
-│   ├── models/           # X-MoFE + baselines + ablations
-│   ├── losses/           # task, reliability, faithfulness, stability, entropy
-│   ├── training/         # trainer, evaluator, checkpointing
-│   ├── evaluation/       # explanation metrics, deletion/insertion, reliability alignment
-│   ├── robustness/       # missing- and noisy-modality protocols
-│   ├── explainability/   # explanation outputs and analysis
-│   ├── vlms/             # Qwen / LLaVA-OneVision inference helpers
-│   └── utils/            # logging, seeding, IO
-├── scripts/         # data prep, feature extraction, training, evaluation, reporting
-├── experiments/     # per-experiment outputs (gitignored)
-├── results/         # collected result tables (gitignored)
-├── checkpoints/     # model checkpoints (gitignored)
-├── logs/            # training/eval logs (gitignored)
-├── notebooks/       # exploratory analysis
-├── tests/           # unit tests
-├── docs/            # internal docs
-├── paper/
-│   ├── emnlp2026/   # in-progress paper sources
-│   └── old/         # preserved preprint sources (gitignored)
-└── legacy/          # preserved code from the preliminary preprint pipeline
+│   ├── data/                     # dataset loading and split utilities
+│   ├── encoders/                 # frozen ModernBERT / WavLM / VideoMAEv2 wrappers
+│   ├── models/
+│   │   ├── baselines/            # MulT, Self-MM, MISA, Dynamic Fusion Graph
+│   │   └── ablations/            # X-MoFE component-removal variants
+│   ├── losses/                   # task, reliability, faithfulness, stability, entropy
+│   ├── training/                 # trainer, evaluator, checkpointing
+│   ├── evaluation/               # explanation metrics, deletion/insertion, reliability alignment
+│   ├── robustness/               # missing- and noisy-modality protocols
+│   ├── explainability/           # explanation outputs and analysis
+│   ├── vlms/                     # Qwen2.5-VL / LLaVA-OneVision inference helpers
+│   └── utils/                    # logging, seeding, IO
+│
+├── scripts/
+│   ├── data/                     # dataset preparation
+│   ├── features/                 # feature extraction (ModernBERT/WavLM/VideoMAEv2)
+│   ├── train/                    # training entry points
+│   ├── evaluate/                 # evaluation runs
+│   ├── vlms/                     # VLM inference runners
+│   └── reporting/                # table/figure generation
+│
+├── notebooks/                    # exploratory analysis
+├── tests/                        # unit tests
+├── docs/                         # internal docs
+│
+└── legacy/                       # preserved preliminary preprint pipeline
+    ├── main.py
+    ├── config.py
+    ├── src/                      # old data / models / training / utils
+    ├── scripts/                  # old train_unimodal / train_multimodal / evaluate
+    └── data/processed/           # old BERT-CLS / averaged-COVAREP / averaged-OpenFace caches
 ```
 
 ---
@@ -87,7 +112,7 @@ conda activate xmofe
 pip install -e .
 ```
 
-The `xmofe` package is installed in editable mode so `import src.models.xmofe` resolves while you iterate.
+The `xmofe` package is installed in editable mode so imports under `src/` resolve as you develop.
 
 ---
 
@@ -105,7 +130,7 @@ Strategy: freeze all encoders, cache features once per dataset, train only fusio
 
 ## Legacy work
 
-The preliminary preprint (transformer cross-attention fusion on CMU-MOSEI with BERT-CLS / averaged COVAREP / averaged OpenFace features) is preserved under [`legacy/`](legacy/) for reproducibility and as a starting reference. The accompanying paper sources live in [`paper/old/`](paper/old/) (gitignored locally).
+The preliminary preprint — transformer cross-attention fusion on CMU-MOSEI with BERT-CLS text embeddings, time-averaged COVAREP audio features, and time-averaged OpenFace visual features — is preserved under [`legacy/`](legacy/), including the original processed feature pickles. The legacy paper preprint can be found at [`arXiv:2505.06110`](https://arxiv.org/abs/2505.06110).
 
 ---
 
