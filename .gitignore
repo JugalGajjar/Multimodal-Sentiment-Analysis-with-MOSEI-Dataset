@@ -1,4 +1,64 @@
+# macOS
 .DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+.installed.cfg
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Paper artifacts (LaTeX, PDFs, build output)
 paper/
-logs/
-models/
+
+# Experiment outputs (track the directory shell, ignore contents)
+logs/*
+!logs/.gitkeep
+checkpoints/*
+!checkpoints/.gitkeep
+results/*
+!results/.gitkeep
+experiments/*
+!experiments/.gitkeep
+runs/
+wandb/
+mlruns/
+
+# Cached features and large data (track shell, ignore contents)
+data/raw/*
+!data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/external/*
+!data/external/.gitkeep
+
+# Legacy run artifacts (keep code and processed pickles, ignore weights and logs)
+legacy/logs/
+legacy/models/
+
+# Project planning and documentation
+X-MoFE_Research_Project_Specification.md

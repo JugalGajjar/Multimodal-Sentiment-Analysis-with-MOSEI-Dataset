@@ -1,136 +1,114 @@
-# Multimodal Sentiment Analysis with MOSEI Dataset
+# X-MoFE: Faithful and Reliability-Aware Multimodal Fusion for Emotion and Sentiment Understanding
 
-A transformer-based project for multimodal sentiment analysis using the [CMU-MOSEI dataset](http://multicomp.cs.cmu.edu/resources/cmu-mosei-dataset/), combining text, audio, and visual modalities to better understand human sentiment.
+X-MoFE is an explainable multimodal fusion architecture for emotion and sentiment understanding. It learns
+which modality to trust on a per-sample basis, which cross-modal interactions drive a prediction, and whether
+those explanations are faithful to the model's actual sensitivity.
 
----
-
-## Project Overview
-
-This project aims to build a sentiment analysis system that integrates:
-- **Textual data** (transcriptions of utterances)
-- **Acoustic features** (tone, pitch, MFCC)
-- **Visual expressions** (facial gestures and movement)
-
-We utilize transformer-based encoders per modality and implement early fusion using cross-attention, followed by a regression head to predict sentiment on a continuous scale from -3 to +3.
+> Project status: in active development. This repository is being upgraded from a preliminary preprint
+> ([`legacy/`](legacy/), [`paper/old/`](paper/old/)) into a new method paper. See
+> [`X-MoFE_Research_Project_Specification.md`](X-MoFE_Research_Project_Specification.md) for the full
+> research plan.
 
 ---
 
-## Directory Structure
+## Key ideas
+
+- **Frozen modern unimodal encoders** — text: ModernBERT-base, audio: WavLM Base+, visual: VideoMAEv2-base. The learnable contribution is the fusion architecture, not encoder fine-tuning.
+- **Sample-wise modality reliability** — a reliability estimator predicts how much each modality should be trusted for a given sample.
+- **Cross-modal interaction attribution** — pairwise (T-A, T-V, A-V) and tri-modal interactions are weighted explicitly.
+- **Three-level explanations** — modality, temporal, and interaction outputs, each tied to the prediction.
+- **Faithfulness-centered training** — auxiliary losses align reliability scores with prediction sensitivity, encourage stable explanations under perturbation, and control reliability entropy.
+
+---
+
+## Datasets
+
+| Dataset    | Role                                                                 |
+|------------|----------------------------------------------------------------------|
+| CMU-MOSEI  | Large-scale multimodal sentiment / emotion benchmark                 |
+| MELD       | Conversational emotion recognition                                   |
+| CH-SIMS    | Independent unimodal annotations — used for reliability supervision  |
+
+## Baselines
+
+- **Multimodal fusion**: MulT, Self-MM, MISA, Dynamic Fusion Graph (MAG-BERT as backup)
+- **VLM / MLLM (zero-/few-shot, inference only)**: Qwen2.5-VL, LLaVA-OneVision
+
+---
+
+## Repository layout
 
 ```
-Multimodal-Sentiment-Analysis-with-MOSEI-Dataset/
-├── config.py                  # Configuration parameters
-├── data/                      # Data storage directory
-│   ├── raw/                   # Raw downloaded data
-│   └── processed/             # Preprocessed features
+.
+├── configs/         # Hydra/YAML configs (datasets, encoders, models, experiments, vlms)
+├── data/            # raw / interim / processed / external feature caches (gitignored)
 ├── src/
-│   ├── data/
-│   │   ├── download.py        # Download MOSEI dataset
-│   │   ├── preprocess.py      # Feature extraction
-│   │   └── dataset.py         # PyTorch dataset classes
-│   ├── models/
-│   │   ├── text.py            # Text-only models
-│   │   ├── audio.py           # Audio-only models
-│   │   ├── visual.py          # Visual-only models
-│   │   ├── fusion.py          # Multimodal fusion models
-│   │   └── attention.py       # Cross-attention mechanisms
-│   ├── training/
-│   │   ├── trainer.py         # Training loop
-│   │   └── metrics.py         # Evaluation metrics
-│   └── utils/
-│       ├── logging.py         # Logging utilities
-│       └── visualization.py   # Result visualization
-├── scripts/
-│   ├── train_unimodal.py      # Train unimodal baselines
-│   ├── train_multimodal.py    # Train multimodal model
-│   └── evaluate.py            # Evaluation script
-├── main.py                    # Main entry point
-├── requirements.txt
-├── README.md
-└── LICENSE
+│   ├── data/             # dataset loading
+│   ├── encoders/         # frozen ModernBERT / WavLM / VideoMAEv2 wrappers
+│   ├── models/           # X-MoFE + baselines + ablations
+│   ├── losses/           # task, reliability, faithfulness, stability, entropy
+│   ├── training/         # trainer, evaluator, checkpointing
+│   ├── evaluation/       # explanation metrics, deletion/insertion, reliability alignment
+│   ├── robustness/       # missing- and noisy-modality protocols
+│   ├── explainability/   # explanation outputs and analysis
+│   ├── vlms/             # Qwen / LLaVA-OneVision inference helpers
+│   └── utils/            # logging, seeding, IO
+├── scripts/         # data prep, feature extraction, training, evaluation, reporting
+├── experiments/     # per-experiment outputs (gitignored)
+├── results/         # collected result tables (gitignored)
+├── checkpoints/     # model checkpoints (gitignored)
+├── logs/            # training/eval logs (gitignored)
+├── notebooks/       # exploratory analysis
+├── tests/           # unit tests
+├── docs/            # internal docs
+├── paper/
+│   ├── emnlp2026/   # in-progress paper sources
+│   └── old/         # preserved preprint sources (gitignored)
+└── legacy/          # preserved code from the preliminary preprint pipeline
 ```
 
 ---
 
-## Dataset: CMU-MOSEI
+## Setup
 
-- 23,500 annotated utterances from 1,000+ speakers
-- Aligned text, audio, and visual data
-- Continuous sentiment score from -3 (very negative) to +3 (very positive)
-
-To download and process the dataset:
+### pip
 
 ```bash
-# Clone and set up the SDK
-git clone https://github.com/CMU-MultiComp-Lab/CMU-MultimodalSDK.git
-cd CMU-MultimodalSDK
-pip install -e .
-
-# Back in project root:
-python src/data/download.py
-python src/data/preprocess.py
-```
-
----
-
-## Methodology
-
-### Feature Extraction
-- **Text**: BERT embeddings (`bert-base-uncased`)
-- **Audio**: Preprocessed audio features
-- **Visual**: Facial action units and expression vectors (OpenFace or precomputed)
-
-### Architecture
-- **Modality Encoders**: Independent transformer layers per modality
-- **Fusion**: Fusion using a cross-attention transformer
-- **Output**: Regression head to predict a sentiment score ∈ [-3, +3]
-
----
-
-## Evaluation Metrics Used
-
-- Mean Absolute Error (MAE)
-- Pearson Correlation Coefficient
-- Binary Accuracy (positive vs negative sentiment)
-- F1 Score for binary classification
-
----
-
-## How to Run
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/JugalGajjar/Multimodal-Sentiment-Analysis-with-MOSEI-Dataset.git
-cd Multimodal-Sentiment-Analysis-with-MOSEI-Dataset
-```
-
-### 2. Install dependencies
-```bash
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 ```
 
-### 3. Execute main.py
+### conda
+
 ```bash
-python main.py
+conda env create -f environment.yml
+conda activate xmofe
+pip install -e .
 ```
 
----
-
-## Presentation (PPT/Video)
-
-- [Project Paper](https://github.com/JugalGajjar/Multimodal-Sentiment-Analysis-with-MOSEI-Dataset/blob/main/project_paper.pdf)
-- [YouTube Video (Short)](https://youtu.be/stYaQOx14zE?si=m35rxNYSfkhHuerq)
-- [YouTube Video (Detailed)](https://youtu.be/hF3ERyC_iYc?si=nhdp_orkF0e5rEhX)
+The `xmofe` package is installed in editable mode so `import src.models.xmofe` resolves while you iterate.
 
 ---
 
-## Team Members
+## Compute strategy
 
-- Jugal Gajjar [GitHub](https://github.com/JugalGajjar), [LinkedIn](https://www.linkedin.com/in/jugal-gajjar/)
-- Kaustik Ranaware [GitHub](https://github.com/KAUSTIKR), [LinkedIn](https://www.linkedin.com/in/kaustik/)
+The project is intentionally compute-aware. Available hardware:
+
+- M4 Pro MacBook Pro, 48 GB unified memory
+- Google Colab free tier
+- Kaggle P100, ~30 hours / week
+
+Strategy: freeze all encoders, cache features once per dataset, train only fusion + explanation modules, run 3 seeds for the final X-MoFE and key controlled variants (1 seed elsewhere), and use VLMs as inference-only baselines on stratified subsets.
+
+---
+
+## Legacy work
+
+The preliminary preprint (transformer cross-attention fusion on CMU-MOSEI with BERT-CLS / averaged COVAREP / averaged OpenFace features) is preserved under [`legacy/`](legacy/) for reproducibility and as a starting reference. The accompanying paper sources live in [`paper/old/`](paper/old/) (gitignored locally).
 
 ---
 
 ## License
 
-This project is developed for academic and research purposes only. The model weights and code in this project are released under the [MIT License](https://opensource.org/licenses/MIT).
+Released under the [MIT License](LICENSE).
