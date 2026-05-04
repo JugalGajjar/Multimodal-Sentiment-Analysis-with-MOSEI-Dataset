@@ -1,3 +1,4 @@
+from src.data.features import cache_path, read_feature_cache, write_feature_cache
 from src.data.schemas import (
     VALID_DATASETS,
     VALID_SPLITS,
@@ -13,8 +14,11 @@ __all__ = [
     "VALID_SPLITS",
     "VALID_TASKS",
     "Sample",
+    "cache_path",
+    "read_feature_cache",
     "read_jsonl",
-    "write_jsonl",
     "read_splits",
+    "write_feature_cache",
+    "write_jsonl",
     "write_splits",
 ]
