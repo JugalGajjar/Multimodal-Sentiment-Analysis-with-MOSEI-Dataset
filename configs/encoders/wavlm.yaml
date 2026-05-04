@@ -1,0 +1,29 @@
+# WavLM Base+ audio encoder configuration
+name: wavlm
+modality: audio
+model_name: microsoft/wavlm-base-plus
+feature_dim: 768
+
+# Audio preprocessing
+sampling_rate: 16000        # WavLM was pretrained at 16 kHz
+max_duration_seconds: 8.0   # cap clip length; longer clips truncated, shorter padded
+chunk_seconds: null         # if set, split long clips into N-second windows
+
+# Inference
+batch_size: 4               # WavLM is heavier than the text encoder
+output: last_hidden_state   # (B, L, 768) at 50 Hz — frame-level transformer features
+freeze: true
+
+# CSD passthrough fallback (used by datasets without raw audio, e.g. MOSEI)
+csd_fallback:
+  enabled: true
+  feature_name: COVAREP
+  feature_dim: 74
+  description: |
+    For datasets that ship pre-extracted COVAREP sequences instead of raw mp4s,
+    extract_audio_features.py reads CMU_MOSEI_COVAREP.csd and slices per segment
+    rather than running WavLM. Cached features are at 100 Hz with 74 dims and
+    are stored alongside MELD/CH-SIMS WavLM caches under the same schema.
+
+# Cache
+cache_dtype: float16

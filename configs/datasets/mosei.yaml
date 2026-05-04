@@ -43,3 +43,14 @@ labels:
 video:
   root: null  # e.g. data/raw/mosei/videos
   extension: .mp4
+
+# Per-encoder overrides applied during feature extraction. These are merged
+# on top of the corresponding encoder config (configs/encoders/<name>.yaml)
+# before extraction, so dataset-specific quirks stay scoped to the dataset.
+#
+# MOSEI rationale:
+#   * text — full-video transcripts mean ~80% of samples saturate the default
+#     128-token cap. Bumped to 512 to keep the tail of long monologues.
+encoder_overrides:
+  text:
+    max_length: 512

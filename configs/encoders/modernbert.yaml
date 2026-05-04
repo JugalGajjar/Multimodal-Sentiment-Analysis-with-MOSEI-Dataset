@@ -1,0 +1,17 @@
+# ModernBERT-base text encoder configuration
+name: modernbert
+modality: text
+model_name: answerdotai/ModernBERT-base
+feature_dim: 768
+
+# Tokenization
+max_length: 128         # token cap; transcripts past this are truncated
+padding: max_length     # pad every sequence to max_length so all caches share L_max
+
+# Inference
+batch_size: 32
+output: last_hidden_state  # (B, L_max, 768) — kept as a sequence for attention pooling
+freeze: true               # encoder is frozen; we cache features once
+
+# Cache
+cache_dtype: float16       # fp16 on disk to halve storage; trainer can upcast

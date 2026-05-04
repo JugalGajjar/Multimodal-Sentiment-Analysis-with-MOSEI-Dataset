@@ -1,0 +1,30 @@
+# VideoMAEv2 visual encoder configuration
+name: videomae
+modality: visual
+model_name: OpenGVLab/VideoMAEv2-Base
+feature_dim: 768
+
+# Frame sampling
+num_frames: 16              # uniformly sampled across the clip
+image_size: 224
+sampling_strategy: uniform  # one of: uniform, random, dense
+
+# Inference
+batch_size: 2               # VideoMAE on 16 frames is the heaviest of the three
+output: last_hidden_state   # (B, num_patches, 768); num_patches = (num_frames/2) * (224/16)^2 = 8*14*14 = 1568
+freeze: true
+
+# CSD passthrough fallback (used by datasets without raw video, e.g. MOSEI)
+csd_fallback:
+  enabled: true
+  feature_name: VisualOpenFace2
+  feature_dim: 35
+  description: |
+    For datasets that ship pre-extracted OpenFace2 sequences instead of raw mp4s,
+    extract_visual_features.py reads CMU_MOSEI_VisualOpenFace2.csd and slices per
+    segment rather than running VideoMAEv2. Cached features are at ~30 Hz with
+    35 dims and are stored alongside MELD/CH-SIMS VideoMAE caches under the same
+    schema.
+
+# Cache
+cache_dtype: float16
