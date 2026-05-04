@@ -1,0 +1,45 @@
+# CMU-MOSEI dataset configuration
+name: mosei
+display_name: CMU-MOSEI
+
+# Source
+download:
+  source: gdrive_folder
+  url: https://drive.google.com/drive/folders/1sNPjCssAiUHVNgqnMiSEKX8P2E5GhQct
+  folder_id: 1sNPjCssAiUHVNgqnMiSEKX8P2E5GhQct
+  notes: |
+    Mirror of CMU-MOSEI assets uploaded by the authors during the preprint work.
+    Contents are downloaded with `gdown --folder` into data/raw/mosei/.
+
+# Filesystem layout (relative to repo root)
+paths:
+  raw_dir: data/raw/CMU-MOSEI
+  interim_dir: data/interim/mosei
+  metadata_file: data/interim/mosei/metadata.jsonl
+  splits_file: data/interim/mosei/splits.json
+
+# CSD files used by CMU-MultimodalSDK to enumerate segments and labels.
+# prepare_mosei.py picks the first match for each modality.
+csd_files:
+  language:
+    - CMU_MOSEI_TimestampedWords.csd
+  labels:
+    - CMU_MOSEI_Labels.csd
+
+# Standard fold IDs are exposed by mmsdk.mmdatasdk.cmu_mosei.standard_folds
+# (train_fold, valid_fold, test_fold). prepare_mosei.py uses these directly.
+use_standard_folds: true
+
+# Label semantics
+labels:
+  task: regression
+  primary: sentiment_regression  # field name inside Sample.labels
+  range: [-3.0, 3.0]
+  emotions: [happy, sad, anger, surprise, disgust, fear]
+
+# Optional raw video lookup. If you have CMU-MOSEI raw mp4s, set their root
+# here and prepare_mosei.py will populate Sample.video_path with start/end
+# times so VideoMAEv2 feature extraction can slice clips.
+video:
+  root: null  # e.g. data/raw/mosei/videos
+  extension: .mp4

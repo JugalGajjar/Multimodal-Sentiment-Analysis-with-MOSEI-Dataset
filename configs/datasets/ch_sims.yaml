@@ -1,0 +1,52 @@
+# CH-SIMS dataset configuration
+name: ch_sims
+display_name: CH-SIMS
+
+# Source
+download:
+  source: gdrive_folder
+  url: https://drive.google.com/drive/folders/1wFvGS0ebKRvT3q6Xolot-sDtCNfz7HRA
+  folder_id: 1wFvGS0ebKRvT3q6Xolot-sDtCNfz7HRA
+  notes: |
+    CH-SIMS distribution. Expected layout under data/raw/ch_sims/:
+      meta.csv       (multimodal + unimodal sentiment labels per clip)
+      Raw/<video_id>/<clip_id>.mp4   (clip_id is zero-padded 4-digit)
+    Audio is extracted from the mp4 clips during feature extraction (Phase 2).
+
+# Filesystem layout (relative to repo root)
+paths:
+  raw_dir: data/raw/ch_sims
+  meta_csv: data/raw/ch_sims/meta.csv
+  clips_root: data/raw/ch_sims/Raw
+  interim_dir: data/interim/ch_sims
+  metadata_file: data/interim/ch_sims/metadata.jsonl
+  splits_file: data/interim/ch_sims/splits.json
+
+# Mapping from CH-SIMS `mode` column values to our split names
+split_map:
+  train: train
+  valid: val
+  test: test
+
+# CSV column names (from the official CH-SIMS distribution)
+csv_columns:
+  video_id: video_id
+  clip_id: clip_id
+  text: text
+  mode: mode
+  annotation: annotation
+  multimodal_label: label
+  text_label: label_T
+  audio_label: label_A
+  visual_label: label_V
+
+# Label semantics
+labels:
+  task: regression
+  primary: sentiment_M  # multimodal sentiment label
+  range: [-1.0, 1.0]
+  unimodal_keys: [sentiment_T, sentiment_A, sentiment_V]
+  annotations: [Negative, Neutral, Positive]
+
+# Sample id pattern: combine video and clip ids
+sample_id_template: "{video_id}_{clip_id}"

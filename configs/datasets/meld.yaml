@@ -1,0 +1,47 @@
+# MELD dataset configuration
+name: meld
+display_name: MELD
+
+# Source
+download:
+  source: http
+  url: https://web.eecs.umich.edu/~mihalcea/downloads/MELD.Raw.tar.gz
+  archive: MELD.Raw.tar.gz
+  notes: |
+    The tarball expands into MELD.Raw/ with three subdirectories:
+      train_splits/, dev_splits_complete/, output_repeated_splits_test/
+    Each contains diaX_uttY.mp4 clips. Label CSVs sit at the top level:
+      train_sent_emo.csv, dev_sent_emo.csv, test_sent_emo.csv
+
+# Filesystem layout (relative to repo root)
+paths:
+  raw_dir: data/raw/meld
+  raw_root: data/raw/meld/MELD.Raw
+  interim_dir: data/interim/meld
+  metadata_file: data/interim/meld/metadata.jsonl
+  splits_file: data/interim/meld/splits.json
+
+# Per-split CSV + clip directory (relative to raw_root)
+splits:
+  train:
+    csv: train_sent_emo.csv
+    clips_dir: train_splits
+  val:
+    csv: dev_sent_emo.csv
+    clips_dir: dev_splits_complete
+  test:
+    csv: test_sent_emo.csv
+    clips_dir: output_repeated_splits_test
+
+# Label semantics
+labels:
+  task: classification
+  primary: emotion_id
+  emotions: [neutral, joy, sadness, anger, surprise, fear, disgust]
+  sentiments: [neutral, positive, negative]
+
+# Sample id pattern: dialogue ids reset per split, so prefix with split name
+# to keep ids globally unique. Clip filenames on disk still use the unprefixed
+# "dia<X>_utt<Y>.mp4" pattern, so prepare_meld.py looks them up separately.
+sample_id_template: "{split}_dia{dialogue_id}_utt{utterance_id}"
+clip_filename_template: "dia{dialogue_id}_utt{utterance_id}.mp4"
