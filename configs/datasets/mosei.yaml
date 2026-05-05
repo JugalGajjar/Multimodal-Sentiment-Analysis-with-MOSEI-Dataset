@@ -54,3 +54,13 @@ video:
 encoder_overrides:
   text:
     max_length: 512
+  audio:
+    # MOSEI ships pre-extracted COVAREP features instead of raw waveforms,
+    # so the audio extractor reads from the CSD instead of running WavLM.
+    source: csd
+    csd_path: data/raw/CMU-MOSEI/CMU_MOSEI_COVAREP.csd
+    feature_dim: 74
+    sampling_rate: 100        # COVAREP frame rate
+    max_frames: 6000          # cap at 60 seconds; longer videos truncated
+    encoder_name: covarep
+    encoder_source: CMU_MOSEI_COVAREP.csd
