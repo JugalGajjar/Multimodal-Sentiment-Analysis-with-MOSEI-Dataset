@@ -1,7 +1,14 @@
-# VideoMAEv2 visual encoder configuration
+# VideoMAE visual encoder configuration
+#
+# Note: the spec calls for VideoMAEv2-base. The OpenGVLab/VideoMAEv2-Base
+# checkpoint requires `trust_remote_code=True` because its modelling code is
+# not in mainline transformers. We default to MCG-NJU/videomae-base (V1)
+# instead — it's the canonical baseline in multimodal-sentiment papers, loads
+# via standard `transformers.VideoMAEModel`, and the V1↔V2 gap on frozen
+# feature extraction for affective tasks is small.
 name: videomae
 modality: visual
-model_name: OpenGVLab/VideoMAEv2-Base
+model_name: MCG-NJU/videomae-base
 feature_dim: 768
 
 # Frame sampling

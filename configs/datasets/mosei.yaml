@@ -64,3 +64,14 @@ encoder_overrides:
     max_frames: 6000          # cap at 60 seconds; longer videos truncated
     encoder_name: covarep
     encoder_source: CMU_MOSEI_COVAREP.csd
+  visual:
+    # MOSEI ships pre-extracted OpenFace2 features instead of raw videos.
+    # The CSD is 713-dim per frame — far richer than the legacy 35-dim slice
+    # — covering facial landmarks, AUs, gaze, head pose, and HoG descriptors.
+    source: csd
+    csd_path: data/raw/CMU-MOSEI/CMU_MOSEI_VisualOpenFace2.csd
+    feature_dim: 713
+    sampling_rate: 30          # ~video framerate; varies per clip
+    max_frames: 3600           # ~120 sec coverage; p90 of length distribution
+    encoder_name: openface2
+    encoder_source: CMU_MOSEI_VisualOpenFace2.csd
