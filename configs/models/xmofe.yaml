@@ -1,0 +1,27 @@
+# X-MoFE model architecture configuration
+#
+# Per-modality input dims are dataset-specific and provided at construction
+# time (MELD/CH-SIMS use 768/768/768 from ModernBERT/WavLM/VideoMAE; MOSEI
+# uses 768/74/713 from ModernBERT/COVAREP/OpenFace2). Everything else here
+# is dataset-agnostic.
+
+name: xmofe
+shared_dim: 256                     # d in spec §11.4; fallback 128 if memory tight
+attention_heads: 4                  # heads in cross-modal attention blocks
+dropout: 0.2
+ffn_multiplier: 4                   # FFN inner-dim factor in fusion layer
+
+reliability:
+  mlp_hidden: 256
+  use_quality_features: false       # API present; flip on once we wire SNR/face-conf etc.
+  num_quality_features: 0           # per-modality count (e.g. 3 for {snr, face_conf, blur})
+
+interaction:
+  use_trimodal: true                # adds c_TAV; richer interaction-attribution table
+  mlp_hidden: 256
+
+# Prediction head — task and num_classes come from the dataset's manifest at
+# construction time; defaults below are placeholders.
+prediction:
+  task: regression                  # "regression" | "classification"
+  num_classes: 1                    # ignored for regression; set to C for classification
