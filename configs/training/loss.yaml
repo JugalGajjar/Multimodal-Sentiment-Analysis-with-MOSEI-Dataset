@@ -1,0 +1,37 @@
+# X-MoFE composite loss configuration (spec §14)
+#
+# L_total = L_task + α·L_reliability + β·L_faithfulness + γ·L_stability + δ·L_entropy
+#
+# Initial weights are the spec's "starting values"; tune lightly per dataset
+# under the compute-aware budget.
+
+weights:
+  alpha: 0.2          # reliability supervision (CH-SIMS only — others contribute 0)
+  beta: 0.3           # faithfulness alignment
+  gamma: 0.1          # stability under input perturbation
+  delta: 0.05         # entropy regularization on r
+
+# Target average entropy for r ∈ R^3. ln(3) ≈ 1.0986 = uniform; 0 = collapsed.
+# 0.7 ≈ 64% of max entropy: informative reliability scores without collapse.
+target_entropy: 0.7
+
+faithfulness:
+  # D() metric for prediction-sensitivity scoring under classification.
+  # Regression always uses absolute prediction difference.
+  classification_metric: kl   # "kl" | "tvd" | "prob_drop"
+  # Detach the target distribution s when computing KL(s || r). This focuses
+  # the gradient on aligning r with observed sensitivities (the explanation
+  # objective) rather than encouraging the model to produce easy-to-predict
+  # ablation outputs.
+  detach_target: true
+
+stability:
+  # Cached features were already noisy from frozen encoders, so perturbations
+  # need only be small to remain label-preserving. Strengths apply when the
+  # corresponding modality is present in the batch.
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0  # softmax temperature when constructing r*
