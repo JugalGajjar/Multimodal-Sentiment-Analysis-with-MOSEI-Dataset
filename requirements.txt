@@ -32,6 +32,8 @@ omegaconf
 pyyaml
 tqdm
 tensorboard
+wandb>=0.17
+python-dotenv>=1.0
 
 # Visualization and reporting
 matplotlib

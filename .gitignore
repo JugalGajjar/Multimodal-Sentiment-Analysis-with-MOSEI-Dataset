@@ -30,6 +30,10 @@ htmlcov/
 *.swp
 *.swo
 
+# Secrets — local environment variables (e.g. WANDB_API_KEY)
+.env
+.env.*
+
 # Paper artifacts (LaTeX, PDFs, build output)
 paper/
 
