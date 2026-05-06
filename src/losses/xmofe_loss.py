@@ -96,25 +96,39 @@ class XMoFELoss(nn.Module):
         batch: Mapping[str, Any],
         clean_output: XMoFEOutput,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Compute the composite loss.
+
+        Auxiliary terms whose weight is exactly zero are skipped — saves the
+        4 extra forward passes the baseline-comparison runs would otherwise
+        burn (3 for faithfulness, 1 for stability) when training task-only.
+        """
         if "label" not in batch:
             raise KeyError("batch must contain 'label' for the task loss")
 
+        zero = clean_output.prediction.new_zeros(())
         components: dict[str, torch.Tensor] = {
             "task": self.task_loss(clean_output.prediction, batch["label"]),
-            "entropy": self.entropy_loss(clean_output.reliability),
-            "faithfulness": self.faithfulness_loss(model, batch, clean_output),
-            "stability": self.stability_loss(model, batch, clean_output),
         }
 
+        components["entropy"] = (
+            self.entropy_loss(clean_output.reliability) if self.delta > 0 else zero
+        )
+        components["faithfulness"] = (
+            self.faithfulness_loss(model, batch, clean_output) if self.beta > 0 else zero
+        )
+        components["stability"] = (
+            self.stability_loss(model, batch, clean_output) if self.gamma > 0 else zero
+        )
+
         unimodal = batch.get("unimodal_labels")
-        if unimodal is not None:
+        if self.alpha > 0 and unimodal is not None:
             components["reliability"] = self.reliability_loss(
                 clean_output.reliability,
                 unimodal,
                 batch["label"].to(unimodal.dtype),
             )
         else:
-            components["reliability"] = clean_output.prediction.new_zeros(())
+            components["reliability"] = zero
 
         total = (
             components["task"]
