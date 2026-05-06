@@ -168,9 +168,21 @@ class OpenFace2SequenceReader:
 
     For each ``video_id``, returns the entire 713-dim OpenFace2 sequence
     (facial landmarks + action units + gaze + head pose + HoG) truncated
-    to ``max_frames`` and zero-padded so the cache stacks cleanly. NaN/inf
-    values are replaced with zeros — common in OpenFace2 features when face
-    detection drops out mid-clip.
+    to ``max_frames`` and zero-padded so the cache stacks cleanly.
+
+    OpenFace2's HoG dimensions can carry extreme outliers (we observed
+    magnitudes up to 5×10⁷ in the CMU-MOSEI distribution) that overflow
+    fp16 to ±inf when cached. This reader therefore:
+
+      1. Replaces NaN/inf with zeros.
+      2. Clips raw values to a configurable outlier band before stats.
+      3. Standardizes per-dimension by streaming-pass mean/std stats
+         computed once over the entire CSD on init.
+      4. Clips standardized values to ±10σ to drop residual outliers.
+
+    Values cached after standardization are well within fp16 range and
+    centered on zero, which the downstream ModalityProjection's input
+    LayerNorm leaves close to its no-op fixed point.
     """
 
     def __init__(
@@ -179,13 +191,18 @@ class OpenFace2SequenceReader:
         max_frames: int = 3600,
         sampling_rate: int = 30,
         feature_dim: int | None = None,
+        normalize: bool = True,
+        outlier_clip: float = 1.0e4,
+        standardized_clip: float = 10.0,
     ) -> None:
         from mmsdk import mmdatasdk as md
 
         self.csd_path = str(csd_path)
         self.max_frames = max_frames
         self.sampling_rate = sampling_rate
-        self._explicit_dim = feature_dim
+        self.normalize = normalize
+        self.outlier_clip = float(outlier_clip)
+        self.standardized_clip = float(standardized_clip)
 
         log.info("loading OpenFace2 CSD: %s", self.csd_path)
         self._dataset = md.mmdataset({"visual": self.csd_path})
@@ -202,6 +219,54 @@ class OpenFace2SequenceReader:
                 "configured feature_dim=%d but CSD has %d; using configured value",
                 feature_dim, probed_dim,
             )
+
+        if self.normalize:
+            self.mean, self.std = self._compute_stats()
+        else:
+            self.mean = np.zeros(self.feature_dim, dtype=np.float32)
+            self.std = np.ones(self.feature_dim, dtype=np.float32)
+
+    def _compute_stats(self) -> tuple[np.ndarray, np.ndarray]:
+        """Per-feature mean and std, computed once over the entire CSD.
+
+        Uses outlier clipping before accumulation so a handful of HoG
+        explosions don't dominate the normalization parameters.
+        """
+        log.info("computing OpenFace2 normalization stats over CSD...")
+        total = np.zeros(self.feature_dim, dtype=np.float64)
+        sq_total = np.zeros(self.feature_dim, dtype=np.float64)
+        n_frames = 0
+        for vid in self._dataset["visual"].keys():
+            feats = np.asarray(self._dataset["visual"][vid]["features"], dtype=np.float64)
+            if feats.ndim != 2 or feats.shape[1] != self.feature_dim:
+                continue
+            feats = np.nan_to_num(
+                feats, nan=0.0,
+                posinf=self.outlier_clip, neginf=-self.outlier_clip,
+            )
+            feats = np.clip(feats, -self.outlier_clip, self.outlier_clip)
+            n_frames += feats.shape[0]
+            total += feats.sum(axis=0)
+            sq_total += (feats ** 2).sum(axis=0)
+
+        if n_frames == 0:
+            log.warning("no frames found while computing OpenFace2 stats")
+            return (
+                np.zeros(self.feature_dim, dtype=np.float32),
+                np.ones(self.feature_dim, dtype=np.float32),
+            )
+
+        mean = total / n_frames
+        var = (sq_total / n_frames) - mean ** 2
+        var = np.maximum(var, 0.0)
+        std = np.sqrt(var)
+        # Avoid divide-by-zero for constant dimensions.
+        std = np.where(std < 1e-6, 1.0, std)
+        log.info(
+            "  stats over %d frames: |mean|≈%.3f mean(std)≈%.3f",
+            n_frames, float(np.abs(mean).mean()), float(std.mean()),
+        )
+        return mean.astype(np.float32), std.astype(np.float32)
 
     def encode(
         self,
@@ -222,15 +287,22 @@ class OpenFace2SequenceReader:
                 log.warning("video_id %s missing from OpenFace2 CSD", vid)
                 feats = np.zeros((0, self.feature_dim), dtype=np.float32)
 
-            feats = np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
+            feats = np.nan_to_num(
+                feats, nan=0.0,
+                posinf=self.outlier_clip, neginf=-self.outlier_clip,
+            )
+            feats = np.clip(feats, -self.outlier_clip, self.outlier_clip)
 
             if feats.ndim == 2 and feats.shape[1] != self.feature_dim:
-                # Pad/truncate width dimension to the configured feature_dim
                 fixed = np.zeros((feats.shape[0], self.feature_dim), dtype=np.float32)
                 d = min(feats.shape[1], self.feature_dim)
                 if d > 0:
                     fixed[:, :d] = feats[:, :d]
                 feats = fixed
+
+            if self.normalize and feats.shape[0] > 0:
+                feats = (feats - self.mean) / self.std
+                feats = np.clip(feats, -self.standardized_clip, self.standardized_clip)
 
             t = min(feats.shape[0], self.max_frames) if feats.ndim == 2 else 0
             padded = np.zeros((self.max_frames, self.feature_dim), dtype=np.float32)
