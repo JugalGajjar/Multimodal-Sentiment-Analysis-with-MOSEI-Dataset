@@ -1,0 +1,25 @@
+# Ablation loss: drop the entropy regularization term (δ=0).
+#
+# Spec §19.1 "w/o entropy regularization" row. Used to test whether the
+# reliability distribution collapses or remains diverse without explicit
+# entropy control.
+
+weights:
+  alpha: 0.2          # reliability supervision (CH-SIMS only)
+  beta: 0.3           # faithfulness
+  gamma: 0.1          # stability
+  delta: 0.0          # ← entropy regularization disabled
+
+target_entropy: 0.7   # ignored (delta=0)
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0

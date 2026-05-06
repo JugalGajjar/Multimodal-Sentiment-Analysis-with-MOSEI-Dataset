@@ -1,0 +1,26 @@
+# Ablation loss: drop reliability supervision (α=0).
+#
+# Spec §19.1 "w/o CH-SIMS reliability supervision" row. Only meaningful on
+# CH-SIMS, since other datasets don't ship unimodal annotations and the
+# term is automatically skipped there. Tests whether the unimodal
+# annotation signal is what drives reliable reliability scores.
+
+weights:
+  alpha: 0.0          # ← reliability supervision disabled
+  beta: 0.3           # faithfulness
+  gamma: 0.1          # stability
+  delta: 0.05         # entropy
+
+target_entropy: 0.7
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0  # ignored (alpha=0)

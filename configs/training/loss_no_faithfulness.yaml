@@ -1,0 +1,24 @@
+# Ablation loss: drop the faithfulness alignment term (β=0).
+#
+# Spec §19.1 "w/o faithfulness loss" row. Saves the 3 ablation forwards
+# faithfulness_loss runs per step (XMoFELoss skips them when β=0).
+
+weights:
+  alpha: 0.2          # reliability supervision (CH-SIMS only)
+  beta: 0.0           # ← faithfulness disabled
+  gamma: 0.1          # stability
+  delta: 0.05         # entropy
+
+target_entropy: 0.7
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0

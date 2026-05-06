@@ -1,0 +1,24 @@
+# Ablation loss: drop the stability term (γ=0).
+#
+# Spec §19.1 "w/o stability loss" row. Saves the perturbed forward that
+# stability_loss runs per step (XMoFELoss skips it when γ=0).
+
+weights:
+  alpha: 0.2          # reliability supervision (CH-SIMS only)
+  beta: 0.3           # faithfulness
+  gamma: 0.0          # ← stability disabled
+  delta: 0.05         # entropy
+
+target_entropy: 0.7
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0
