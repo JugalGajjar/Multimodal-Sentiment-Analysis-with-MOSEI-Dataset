@@ -1,0 +1,35 @@
+# MELD training experiment
+#
+# 13707 utterances, 7-class emotion classification with severe imbalance
+# (47% neutral vs 2.6% fear/disgust). Smaller batch keeps memory headroom
+# for the visual cache (22 GB in fp16) plus 5x forward passes per step.
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 16
+  num_epochs: 25
+  num_workers: 0
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld

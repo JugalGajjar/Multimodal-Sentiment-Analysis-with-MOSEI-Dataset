@@ -1,0 +1,36 @@
+# CH-SIMS training experiment
+#
+# 4403 clips; sentiment regression in [-1, 1]. Crucially, this dataset
+# carries unimodal annotations (sentiment_T/A/V) which activate the
+# reliability-supervision loss term in the composite — the X-MoFE story
+# leans on these results.
+
+dataset: ch_sims
+manifest_dir: data/processed/ch_sims
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 16
+  num_epochs: 30
+  num_workers: 0
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: ch_sims

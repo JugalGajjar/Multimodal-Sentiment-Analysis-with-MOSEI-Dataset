@@ -1,0 +1,35 @@
+# MOSEI training experiment
+#
+# Per spec §21.4: AdamW, lr 1e-4, weight_decay 1e-2, batch 16, epochs ≤50,
+# early stopping patience 5. MOSEI is video-level granularity in our setup
+# (3225 samples) — early stopping prevents overfitting on the small split.
+
+dataset: mosei
+manifest_dir: data/processed/mosei
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: regression
+num_classes: 1                    # ignored for regression
+
+training:
+  batch_size: 16
+  num_epochs: 30
+  num_workers: 0                  # eager-loaded dataset; workers add no benefit
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine                  # cosine over the full epoch budget
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: mosei              # actual run name = "{prefix}_{timestamp}"
