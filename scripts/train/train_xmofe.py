@@ -38,7 +38,7 @@ import yaml  # noqa: E402
 
 from src.data import make_dataloader  # noqa: E402
 from src.losses import XMoFELoss  # noqa: E402
-from src.models import XMoFE  # noqa: E402
+from src.models import VARIANTS, build_model  # noqa: E402
 from src.training import (  # noqa: E402
     Evaluator,
     Trainer,
@@ -125,12 +125,25 @@ def main() -> None:
                         help="Checkpoint to resume from (restores model + optimizer + scheduler + epoch).")
     parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging for this run.")
     parser.add_argument("--run-name", default=None, help="Override the auto-generated run name.")
+    parser.add_argument(
+        "--variant", choices=VARIANTS, default="xmofe",
+        help="Model variant to train (default: xmofe).",
+    )
+    parser.add_argument(
+        "--modality", choices=("text", "audio", "visual"), default=None,
+        help="Required when --variant=unimodal.",
+    )
+    parser.add_argument(
+        "--loss-config", type=Path, default=None,
+        help="Override the loss config (e.g. configs/training/loss_task_only.yaml for baselines).",
+    )
     args = parser.parse_args()
 
     config_path = args.config or REPO_ROOT / "configs" / "experiments" / f"{args.experiment}.yaml"
     config = load_yaml(config_path)
     model_config = load_yaml(REPO_ROOT / config["model_config"])
-    loss_config = load_yaml(REPO_ROOT / config["loss_config"])
+    loss_config_path = args.loss_config or (REPO_ROOT / config["loss_config"])
+    loss_config = load_yaml(loss_config_path)
 
     training_cfg = config["training"]
     if args.epochs is not None:
@@ -142,16 +155,20 @@ def main() -> None:
     device = resolve_device(args.device)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_name = args.run_name or f"{config['run']['name_prefix']}_{timestamp}"
+    variant_tag = args.variant if args.variant == "xmofe" else f"{args.variant}{('_' + args.modality) if args.modality else ''}"
+    run_name = args.run_name or f"{config['run']['name_prefix']}_{variant_tag}_{timestamp}"
     run_log_dir = REPO_ROOT / "logs" / run_name
     run_ckpt_dir = REPO_ROOT / "checkpoints" / run_name
 
     # Logger has to start first so we can route everything else through it.
     extras_for_run = {
         "experiment": args.experiment,
+        "variant": args.variant,
+        "modality": args.modality,
         "seed": args.seed,
         "device": str(device),
         "config_path": str(config_path),
+        "loss_config_path": str(loss_config_path),
     }
     logger = TrainingLogger(
         log_dir=run_log_dir,
@@ -182,16 +199,21 @@ def main() -> None:
     )
 
     # ---- Model + loss ------------------------------------------------
-    model = XMoFE.from_config(
-        model_config,
+    model = build_model(
+        variant=args.variant,
+        config=model_config,
         text_dim=feature_dims["text"],
         audio_dim=feature_dims["audio"],
         visual_dim=feature_dims["visual"],
         task=config["task"],
         num_classes=config.get("num_classes", 1),
+        modality=args.modality,
     ).to(device)
     loss_fn = XMoFELoss.from_config(loss_config, task=config["task"]).to(device)
-    logger.info(f"model params: {sum(p.numel() for p in model.parameters()):,}")
+    logger.info(
+        f"variant={args.variant}{(' modality=' + args.modality) if args.modality else ''}  "
+        f"model params: {sum(p.numel() for p in model.parameters()):,}"
+    )
 
     # ---- Optimizer + scheduler ---------------------------------------
     opt_cfg = training_cfg["optimizer"]

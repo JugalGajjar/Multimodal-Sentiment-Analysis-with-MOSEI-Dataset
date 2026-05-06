@@ -1,0 +1,26 @@
+# Task-only composite loss — used for the controlled fusion baselines.
+#
+# All auxiliary terms zeroed out so we compare baseline fusion strategies
+# (early/late/hybrid/unimodal) against X-MoFE's full objective fairly.
+# XMoFELoss skips computation when a weight is 0, so the 4 extra forward
+# passes faithfulness+stability would burn are also avoided.
+
+weights:
+  alpha: 0.0
+  beta: 0.0
+  gamma: 0.0
+  delta: 0.0
+
+target_entropy: 0.7              # ignored (delta=0)
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.0
+  audio_noise_std: 0.0
+  visual_patch_dropout: 0.0
+
+reliability_supervision:
+  similarity_temperature: 1.0
