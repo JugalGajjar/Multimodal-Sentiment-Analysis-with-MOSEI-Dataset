@@ -54,6 +54,13 @@ class XMoFE(nn.Module):
         attention_heads: Heads in cross-modal attention blocks.
         dropout: Dropout rate applied throughout.
         use_trimodal: If True, include ``c_TAV`` and a 4-way ``λ``.
+        use_reliability_gate: If False, replaces the learned reliability
+            estimator with a fixed uniform ``r = [1/3, 1/3, 1/3]``. Used by
+            the ``xmofe_no_reliability`` ablation.
+        use_interaction_block: If False, drops the cross-modal interaction
+            blocks and the interaction estimator entirely. The interaction
+            term ``i`` becomes 0 and only the unimodal evidence ``u`` flows
+            into the fusion. Used by the ``xmofe_no_interaction`` ablation.
         task: ``"regression"`` or ``"classification"``.
         num_classes: Output dim for classification (ignored for regression).
         num_quality_features_per_modality: Size of optional quality vector
@@ -71,6 +78,8 @@ class XMoFE(nn.Module):
         attention_heads: int = 4,
         dropout: float = 0.2,
         use_trimodal: bool = True,
+        use_reliability_gate: bool = True,
+        use_interaction_block: bool = True,
         task: str = "regression",
         num_classes: int = 1,
         num_quality_features_per_modality: int = 0,
@@ -82,6 +91,8 @@ class XMoFE(nn.Module):
 
         self.shared_dim = shared_dim
         self.use_trimodal = use_trimodal
+        self.use_reliability_gate = use_reliability_gate
+        self.use_interaction_block = use_interaction_block
         self.task = task
 
         # Projections
@@ -94,32 +105,42 @@ class XMoFE(nn.Module):
         self.pool_audio = AttentionPool(shared_dim)
         self.pool_visual = AttentionPool(shared_dim)
 
-        # Cross-modal interactions
-        self.cross_ta = CrossModalInteraction(shared_dim, attention_heads, dropout)
-        self.cross_tv = CrossModalInteraction(shared_dim, attention_heads, dropout)
-        self.cross_av = CrossModalInteraction(shared_dim, attention_heads, dropout)
-        self.cross_tav: TriModalInteraction | None = (
-            TriModalInteraction(shared_dim, attention_heads, dropout) if use_trimodal else None
-        )
-
-        num_interactions = 4 if use_trimodal else 3
+        # Cross-modal interactions (skipped entirely when use_interaction_block=False)
+        if use_interaction_block:
+            self.cross_ta = CrossModalInteraction(shared_dim, attention_heads, dropout)
+            self.cross_tv = CrossModalInteraction(shared_dim, attention_heads, dropout)
+            self.cross_av = CrossModalInteraction(shared_dim, attention_heads, dropout)
+            self.cross_tav: TriModalInteraction | None = (
+                TriModalInteraction(shared_dim, attention_heads, dropout) if use_trimodal else None
+            )
+            num_interactions = 4 if use_trimodal else 3
+            self.interaction_estimator: InteractionEstimator | None = InteractionEstimator(
+                shared_dim,
+                num_interactions,
+                mlp_hidden=interaction_mlp_hidden,
+                dropout=dropout,
+            )
+            self.interaction_names = (
+                (*PAIRWISE_INTERACTIONS, TRIMODAL_INTERACTION) if use_trimodal else PAIRWISE_INTERACTIONS
+            )
+        else:
+            self.cross_ta = None
+            self.cross_tv = None
+            self.cross_av = None
+            self.cross_tav = None
+            num_interactions = 0
+            self.interaction_estimator = None
+            self.interaction_names = ()
         self.num_interactions = num_interactions
-        self.interaction_names = (
-            (*PAIRWISE_INTERACTIONS, TRIMODAL_INTERACTION) if use_trimodal else PAIRWISE_INTERACTIONS
-        )
 
-        # Reliability + interaction estimators
-        self.reliability = ReliabilityEstimator(
-            shared_dim,
-            mlp_hidden=reliability_mlp_hidden,
-            dropout=dropout,
-            num_quality_features_per_modality=num_quality_features_per_modality,
-        )
-        self.interaction_estimator = InteractionEstimator(
-            shared_dim,
-            num_interactions,
-            mlp_hidden=interaction_mlp_hidden,
-            dropout=dropout,
+        # Reliability estimator (skipped when use_reliability_gate=False)
+        self.reliability: ReliabilityEstimator | None = (
+            ReliabilityEstimator(
+                shared_dim,
+                mlp_hidden=reliability_mlp_hidden,
+                dropout=dropout,
+                num_quality_features_per_modality=num_quality_features_per_modality,
+            ) if use_reliability_gate else None
         )
 
         # Fusion + prediction
@@ -183,25 +204,34 @@ class XMoFE(nn.Module):
         z_v, alpha_v = self.pool_visual(Z_v, visual_length)
 
         # 3. Reliability scores → modality-level explanation
-        r = self.reliability(z_t, z_a, z_v, quality=quality)        # (B, 3)
+        if self.reliability is not None:
+            r = self.reliability(z_t, z_a, z_v, quality=quality)    # (B, 3)
+        else:
+            # xmofe_no_reliability ablation: fixed uniform 1/3 weighting
+            r = z_t.new_full((z_t.size(0), 3), 1.0 / 3.0)
         r_t, r_a, r_v = r[:, 0:1], r[:, 1:2], r[:, 2:3]
 
         # 4. Cross-modal interactions
-        c_ta = self.cross_ta(Z_t, Z_a, text_length, audio_length)
-        c_tv = self.cross_tv(Z_t, Z_v, text_length, visual_length)
-        c_av = self.cross_av(Z_a, Z_v, audio_length, visual_length)
-        if self.cross_tav is not None:
-            c_tav = self.cross_tav(Z_t, Z_a, Z_v, text_length, audio_length, visual_length)
-            interaction_vecs = (c_ta, c_tv, c_av, c_tav)
+        if self.use_interaction_block:
+            c_ta = self.cross_ta(Z_t, Z_a, text_length, audio_length)
+            c_tv = self.cross_tv(Z_t, Z_v, text_length, visual_length)
+            c_av = self.cross_av(Z_a, Z_v, audio_length, visual_length)
+            if self.cross_tav is not None:
+                c_tav = self.cross_tav(Z_t, Z_a, Z_v, text_length, audio_length, visual_length)
+                interaction_vecs: tuple[torch.Tensor, ...] = (c_ta, c_tv, c_av, c_tav)
+            else:
+                interaction_vecs = (c_ta, c_tv, c_av)
+            # 5. Interaction-contribution weights → interaction-level explanation
+            lam = self.interaction_estimator(*interaction_vecs)     # (B, K)
+            i = sum(lam[:, k:k + 1] * v for k, v in enumerate(interaction_vecs))
         else:
-            interaction_vecs = (c_ta, c_tv, c_av)
-
-        # 5. Interaction-contribution weights → interaction-level explanation
-        lam = self.interaction_estimator(*interaction_vecs)         # (B, K)
+            # xmofe_no_interaction ablation: drop cross-modal evidence
+            interaction_vecs = ()
+            lam = z_t.new_full((z_t.size(0), 1), 1.0)               # placeholder
+            i = z_t.new_zeros(z_t.shape)
 
         # 6. Hybrid fusion
         u = r_t * z_t + r_a * z_a + r_v * z_v                       # (B, D)
-        i = sum(lam[:, k:k + 1] * v for k, v in enumerate(interaction_vecs))
         h_fused = self.fusion(u, i)
 
         # 7. Prediction
@@ -212,12 +242,13 @@ class XMoFE(nn.Module):
             reliability=r,
             interactions=lam,
             temporal_attention={"text": alpha_t, "audio": alpha_a, "visual": alpha_v},
-            interaction_names=self.interaction_names,
+            interaction_names=self.interaction_names if self.interaction_names else ("none",),
             pooled_modalities=(
                 {"text": z_t, "audio": z_a, "visual": z_v} if return_intermediates else None
             ),
             interaction_vectors=(
-                dict(zip(self.interaction_names, interaction_vecs)) if return_intermediates else None
+                dict(zip(self.interaction_names, interaction_vecs))
+                if (return_intermediates and self.interaction_names) else None
             ),
             fused=h_fused if return_intermediates else None,
         )
