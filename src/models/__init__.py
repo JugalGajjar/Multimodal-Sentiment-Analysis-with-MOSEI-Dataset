@@ -1,3 +1,8 @@
+from src.models.ablations import (
+    XMoFENoInteraction,
+    XMoFENoReliability,
+    XMoFENoTrimodal,
+)
 from src.models.attention_pooling import AttentionPool, make_padding_mask
 from src.models.baselines import (
     EarlyFusionModel,
@@ -41,6 +46,9 @@ __all__ = [
     "UnimodalModel",
     "VARIANTS",
     "XMoFE",
+    "XMoFENoInteraction",
+    "XMoFENoReliability",
+    "XMoFENoTrimodal",
     "XMoFEOutput",
     "build_model",
     "make_padding_mask",

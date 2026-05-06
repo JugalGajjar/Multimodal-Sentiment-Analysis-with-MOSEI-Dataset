@@ -12,6 +12,11 @@ from typing import Any, Mapping
 
 import torch.nn as nn
 
+from src.models.ablations import (
+    XMoFENoInteraction,
+    XMoFENoReliability,
+    XMoFENoTrimodal,
+)
 from src.models.baselines import (
     EarlyFusionModel,
     HybridFusionModel,
@@ -20,7 +25,11 @@ from src.models.baselines import (
 )
 from src.models.xmofe import XMoFE
 
-VARIANTS = ("xmofe", "early_fusion", "late_fusion", "hybrid_fusion", "unimodal")
+VARIANTS = (
+    "xmofe",
+    "early_fusion", "late_fusion", "hybrid_fusion", "unimodal",
+    "xmofe_no_reliability", "xmofe_no_interaction", "xmofe_no_trimodal",
+)
 
 
 def build_model(
@@ -58,4 +67,10 @@ def build_model(
         return UnimodalModel.from_config(
             config, text_dim, audio_dim, visual_dim, task, num_classes, modality=modality,
         )
+    if variant == "xmofe_no_reliability":
+        return XMoFENoReliability.from_config(config, text_dim, audio_dim, visual_dim, task, num_classes)
+    if variant == "xmofe_no_interaction":
+        return XMoFENoInteraction.from_config(config, text_dim, audio_dim, visual_dim, task, num_classes)
+    if variant == "xmofe_no_trimodal":
+        return XMoFENoTrimodal.from_config(config, text_dim, audio_dim, visual_dim, task, num_classes)
     raise ValueError(f"unknown variant {variant!r}; expected one of {VARIANTS}")
