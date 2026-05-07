@@ -1,0 +1,81 @@
+# External baselines borrowed from prior work for the main results tables.
+#
+# Per spec §15.3 ("Use official code if possible. If a baseline is too
+# expensive or incompatible: report official/published results separately,
+# clearly mark as 'reported from prior work'"), this file holds numbers
+# imported directly from each baseline's published paper. ``make_main_tables.py``
+# reads them and merges with our own results, tagging their origin so the
+# table caption can mark them as reported (not reproduced).
+#
+# Fill in the metric values as you cite each paper. Leaving a metric as
+# null tells the formatter to print a dash. Add or remove rows as needed.
+
+mosei:
+  MulT:
+    citation: tsai2019multimodal
+    note: "reported from Tsai et al. ACL 2019, sentence-level CMU-MOSEI"
+    metrics:
+      mae: null
+      pearson_r: null
+      acc_2: null
+      f1_2: null
+      acc_7: null
+  Self-MM:
+    citation: yu2021learning
+    note: "reported from Yu et al. AAAI 2021"
+    metrics:
+      mae: null
+      pearson_r: null
+      acc_2: null
+      f1_2: null
+      acc_7: null
+  MISA:
+    citation: hazarika2020misa
+    note: "reported from Hazarika et al. ACM MM 2020"
+    metrics:
+      mae: null
+      pearson_r: null
+      acc_2: null
+      f1_2: null
+  DFG:
+    citation: zadeh2018multimodal
+    note: "Dynamic Fusion Graph; reported with the CMU-MOSEI release"
+    metrics:
+      mae: null
+      pearson_r: null
+      acc_2: null
+      f1_2: null
+
+meld:
+  MulT:
+    citation: tsai2019multimodal
+    note: "reported numbers if available"
+    metrics:
+      accuracy: null
+      weighted_f1: null
+      macro_f1: null
+  Self-MM:
+    citation: yu2021learning
+    metrics:
+      accuracy: null
+      weighted_f1: null
+  MISA:
+    citation: hazarika2020misa
+    metrics:
+      accuracy: null
+      weighted_f1: null
+
+ch_sims:
+  Self-MM:
+    citation: yu2021learning
+    note: "reported on CH-SIMS"
+    metrics:
+      mae: null
+      pearson_r: null
+      acc_2: null
+      f1_2: null
+  MISA:
+    citation: hazarika2020misa
+    metrics:
+      mae: null
+      pearson_r: null
