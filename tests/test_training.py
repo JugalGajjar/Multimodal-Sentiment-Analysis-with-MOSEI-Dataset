@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from src.losses import XMoFELoss
 from src.models import XMoFE
@@ -183,14 +184,13 @@ def test_dataloader_real_meld_shapes():
 # ---------------------------------------------------------------------------
 
 
-def test_trainer_single_step(tmp_path):
-    """End-to-end: build everything, run 1 epoch with 1 batch, no crash."""
+def _make_trainer(tmp_path, *, precision: str = "fp32", device: str = "cpu"):
+    """Build a fully-wired one-batch Trainer for precision/smoke tests."""
     set_seed(0)
     model = XMoFE(64, 64, 64, num_classes=3, task="classification", shared_dim=32, attention_heads=2, dropout=0.1)
     loss_fn = XMoFELoss(task="classification", alpha=0.0, beta=0.1, gamma=0.1, delta=0.05)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
-    # 4 samples, tiny everything
     batch = {
         "text": torch.randn(4, 8, 64),
         "audio": torch.randn(4, 8, 64),
@@ -208,19 +208,25 @@ def test_trainer_single_step(tmp_path):
         def __len__(self) -> int:
             return 1
 
-    evaluator = Evaluator(task="classification", num_classes=3, device="cpu")
+    evaluator = Evaluator(task="classification", num_classes=3, device=device)
     logger = TrainingLogger(log_dir=tmp_path / "logs", run_name="t", config={}, use_wandb=False)
     trainer = Trainer(
         model=model, loss_fn=loss_fn, optimizer=optimizer,
         evaluator=evaluator,
         train_loader=_OneBatchLoader(), val_loader=_OneBatchLoader(),
-        device=torch.device("cpu"), logger=logger,
+        device=torch.device(device), logger=logger,
         checkpoint_dir=tmp_path / "ckpt",
         gradient_clip=1.0,
         early_stopping_metric="accuracy", early_stopping_mode="max",
         early_stopping_patience=10, log_every=1,
+        precision=precision,
     )
+    return trainer, logger
 
+
+def test_trainer_single_step(tmp_path):
+    """End-to-end: build everything, run 1 epoch with 1 batch, no crash."""
+    trainer, logger = _make_trainer(tmp_path)
     result = trainer.train(num_epochs=1)
     logger.finish()
 
@@ -231,3 +237,106 @@ def test_trainer_single_step(tmp_path):
     # File logger wrote at least one line
     assert (tmp_path / "logs" / "training.log").exists()
     assert (tmp_path / "logs" / "metrics.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# Precision / autocast wiring
+# ---------------------------------------------------------------------------
+
+
+def test_trainer_default_precision_is_fp32(tmp_path):
+    trainer, logger = _make_trainer(tmp_path)
+    try:
+        assert trainer.precision == "fp32"
+        assert trainer._autocast_enabled is False
+    finally:
+        logger.finish()
+
+
+def test_trainer_invalid_precision_raises(tmp_path):
+    with pytest.raises(ValueError, match="precision"):
+        _make_trainer(tmp_path, precision="fp16")
+
+
+def test_trainer_bf16_autocast_runs_on_cpu(tmp_path):
+    """bf16 autocast should be enabled on cpu and not crash forward/backward.
+
+    CPU autocast supports bf16 in PyTorch, so this gives us coverage of the
+    autocast wrapper without needing a GPU.
+    """
+    trainer, logger = _make_trainer(tmp_path, precision="bf16", device="cpu")
+    try:
+        assert trainer.precision == "bf16"
+        assert trainer._autocast_enabled is True
+        result = trainer.train(num_epochs=1)
+        assert "history" in result
+    finally:
+        logger.finish()
+
+
+# ---------------------------------------------------------------------------
+# Config sanity — Colab overlays must load cleanly and parity-match the
+# default configs except for the knobs that should differ.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dataset", ["mosei", "meld", "ch_sims"])
+def test_colab_config_loads_and_overrides_expected_fields(dataset):
+    base = REPO_ROOT / "configs" / "experiments" / f"{dataset}.yaml"
+    colab = REPO_ROOT / "configs" / "experiments" / "colab" / f"{dataset}.yaml"
+    assert base.exists() and colab.exists()
+    with base.open() as f:
+        base_cfg = yaml.safe_load(f)
+    with colab.open() as f:
+        colab_cfg = yaml.safe_load(f)
+
+    # Top-level fields that must match the base.
+    for key in ("dataset", "manifest_dir", "model_config", "loss_config", "task", "num_classes"):
+        assert colab_cfg.get(key) == base_cfg.get(key), f"{dataset}: {key} drifted from base config"
+    # Run name_prefix must match so collected results bucket together.
+    assert colab_cfg["run"]["name_prefix"] == base_cfg["run"]["name_prefix"]
+
+    # Knobs the overlay specifically changes.
+    assert colab_cfg["training"]["precision"] == "bf16"
+    assert colab_cfg["training"]["batch_size"] >= base_cfg["training"]["batch_size"]
+
+
+def test_trainer_bf16_falls_back_on_mps(tmp_path, monkeypatch):
+    """bf16 on MPS should silently fall back to fp32 (autocast disabled)."""
+    # Build the trainer with cpu device but tell it the device.type is "mps"
+    # by faking the torch.device. Easiest: build with a cpu trainer then
+    # check the fallback branch directly with a fresh construction.
+    set_seed(0)
+    model = XMoFE(64, 64, 64, num_classes=3, task="classification", shared_dim=32, attention_heads=2, dropout=0.1)
+    loss_fn = XMoFELoss(task="classification", alpha=0.0, beta=0.1, gamma=0.1, delta=0.05)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    evaluator = Evaluator(task="classification", num_classes=3, device="cpu")
+    logger = TrainingLogger(log_dir=tmp_path / "logs", run_name="t", config={}, use_wandb=False)
+
+    class _Empty:
+        def __iter__(self):
+            return iter([])
+
+        def __len__(self):
+            return 0
+
+    # We pass an actual mps-typed device. mps may or may not be available
+    # at runtime; constructing torch.device("mps") doesn't require it to be.
+    trainer = Trainer(
+        model=model, loss_fn=loss_fn, optimizer=optimizer,
+        evaluator=evaluator,
+        train_loader=_Empty(), val_loader=_Empty(),
+        device=torch.device("mps"), logger=logger,
+        checkpoint_dir=tmp_path / "ckpt",
+        gradient_clip=1.0,
+        early_stopping_metric="accuracy", early_stopping_mode="max",
+        early_stopping_patience=10, log_every=1,
+        precision="bf16",
+    )
+    try:
+        # Precision flag preserved, but autocast disabled to avoid the
+        # unsupported mps bf16 path.
+        assert trainer.precision == "bf16"
+        assert trainer._autocast_enabled is False
+    finally:
+        logger.finish()

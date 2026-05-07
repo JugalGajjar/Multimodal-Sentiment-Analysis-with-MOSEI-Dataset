@@ -1,0 +1,39 @@
+# MELD training experiment — Colab A100/H100 80GB overlay.
+#
+# Identical to configs/experiments/meld.yaml except batch=64 (4x the M4 Pro
+# batch of 16) and bf16 autocast. A 6.5 hr run on M4 Pro should drop to
+# roughly 1.5-2 hr per Tier-1 run.
+#
+# Usage:
+#   python scripts/train/train_xmofe.py --experiment colab/meld
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 64
+  num_epochs: 25
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld

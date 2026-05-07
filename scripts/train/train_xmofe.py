@@ -137,6 +137,10 @@ def main() -> None:
         "--loss-config", type=Path, default=None,
         help="Override the loss config (e.g. configs/training/loss_task_only.yaml for baselines).",
     )
+    parser.add_argument(
+        "--precision", choices=("fp32", "bf16"), default=None,
+        help="Override training.precision. Use bf16 on A100/H100 for ~2x speedup.",
+    )
     args = parser.parse_args()
 
     config_path = args.config or REPO_ROOT / "configs" / "experiments" / f"{args.experiment}.yaml"
@@ -150,6 +154,8 @@ def main() -> None:
         training_cfg["num_epochs"] = args.epochs
     if args.batch_size is not None:
         training_cfg["batch_size"] = args.batch_size
+    if args.precision is not None:
+        training_cfg["precision"] = args.precision
 
     set_seed(args.seed)
     device = resolve_device(args.device)
@@ -266,6 +272,7 @@ def main() -> None:
         early_stopping_mode=es_cfg.get("mode"),
         early_stopping_patience=int(es_cfg.get("patience", 5)),
         log_every=int(training_cfg.get("log_every", 50)),
+        precision=str(training_cfg.get("precision", "fp32")),
     )
 
     try:

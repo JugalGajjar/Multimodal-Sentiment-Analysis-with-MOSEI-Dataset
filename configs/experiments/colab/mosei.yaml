@@ -1,0 +1,40 @@
+# MOSEI training experiment — Colab A100/H100 80GB overlay.
+#
+# Identical to configs/experiments/mosei.yaml except batch=16 (4x the M4 Pro
+# batch of 4) and bf16 autocast. A100/H100 native bf16 throughput plus the
+# extra batch should land Tier-1 X-MoFE runs in ~30-60 min each instead of
+# ~4 hr on M4 Pro. If GPU memory is underutilized at batch=16, push to 24.
+#
+# Usage:
+#   python scripts/train/train_xmofe.py --experiment colab/mosei
+
+dataset: mosei
+manifest_dir: data/processed/mosei
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 16
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: mosei

@@ -61,6 +61,11 @@ class Trainer:
             the metric name (``mae``/``mse``/``loss`` → ``"min"`` else ``"max"``).
         early_stopping_patience: number of non-improving epochs before stop.
         log_every: per-step logging cadence.
+        precision: ``"fp32"`` (default) or ``"bf16"``. bf16 wraps the
+            training forward + loss in ``torch.autocast`` for ~2x throughput
+            on A100/H100 with no loss-scaling required. Validation always
+            runs in fp32 for stable metrics. MPS falls back to fp32 since
+            bf16 autocast is not reliably supported there.
     """
 
     def __init__(
@@ -80,6 +85,7 @@ class Trainer:
         early_stopping_mode: str | None = None,
         early_stopping_patience: int = 5,
         log_every: int = 50,
+        precision: str = "fp32",
     ) -> None:
         self.model = model
         self.loss_fn = loss_fn
@@ -102,6 +108,21 @@ class Trainer:
         self.early_stopping_mode = early_stopping_mode
         self.early_stopping_patience = int(early_stopping_patience)
         self.log_every = int(log_every)
+
+        precision = (precision or "fp32").lower()
+        if precision not in {"fp32", "bf16"}:
+            raise ValueError(f"precision must be 'fp32' or 'bf16'; got {precision!r}")
+        self.precision = precision
+        # bf16 autocast is supported on cuda + cpu in torch; mps support is
+        # incomplete and inconsistent. On mps we transparently fall back to fp32.
+        self._autocast_enabled = (
+            precision == "bf16" and self.device.type in {"cuda", "cpu"}
+        )
+        if precision == "bf16" and not self._autocast_enabled:
+            self.logger.info(
+                f"precision=bf16 requested but device={self.device.type!r} "
+                "does not reliably support bf16 autocast; falling back to fp32"
+            )
 
         self.global_step = 0
         self.best_metric: float | None = None
@@ -139,8 +160,13 @@ class Trainer:
 
         for batch_idx, raw_batch in enumerate(self.train_loader):
             batch = self._to_device(raw_batch)
-            output = self.model(**self._model_inputs(batch))
-            total, components = self.loss_fn(self.model, batch, output)
+            if self._autocast_enabled:
+                with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
+                    output = self.model(**self._model_inputs(batch))
+                    total, components = self.loss_fn(self.model, batch, output)
+            else:
+                output = self.model(**self._model_inputs(batch))
+                total, components = self.loss_fn(self.model, batch, output)
 
             self.optimizer.zero_grad(set_to_none=True)
             total.backward()
