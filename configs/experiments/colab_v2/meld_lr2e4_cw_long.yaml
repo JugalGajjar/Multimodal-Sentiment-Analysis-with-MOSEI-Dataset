@@ -1,0 +1,37 @@
+# MELD v2 sweep: full-recipe — sqrt LR + class weights + 50 epochs/p10.
+#
+# v1 stops at epoch 13-15 with patience=5; CE on imbalanced data is noisy
+# enough that 5 patience may be premature. Doubles the budget and patience
+# to give the model room to find a better optimum after the class-weight
+# rebalancing kicks in.
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss_class_weighted.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 64
+  num_epochs: 50
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 2.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 10
+
+run:
+  project: xmofe
+  name_prefix: meld

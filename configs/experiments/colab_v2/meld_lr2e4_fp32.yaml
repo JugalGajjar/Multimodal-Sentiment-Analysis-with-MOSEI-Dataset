@@ -1,0 +1,38 @@
+# MELD v2 sweep: sqrt LR with fp32 (test bf16 noise floor hypothesis).
+#
+# v1 MELD seeds were suspiciously identical (0.5762/0.5796/0.5773, std=0.002).
+# Could indicate bf16's reduced precision creates a noise floor that
+# dominates the seed difference, locking convergence into a wide flat
+# region. fp32 should reveal whether the model can actually find a
+# better optimum given more numerical headroom.
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 64
+  num_epochs: 25
+  num_workers: 0
+  precision: fp32
+  optimizer:
+    name: adamw
+    lr: 2.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld

@@ -1,0 +1,28 @@
+# X-MoFE composite loss with inverse-frequency class weighting on the
+# task term. Designed for MELD's 47%-neutral / 2.6%-fear imbalance, where
+# vanilla CE collapses onto the majority class. Identical to loss.yaml in
+# every other respect.
+#
+# Regression datasets ignore the class_weights field automatically.
+
+weights:
+  alpha: 0.2
+  beta: 0.3
+  gamma: 0.1
+  delta: 0.05
+
+target_entropy: 0.7
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0
+
+class_weights: inverse_frequency

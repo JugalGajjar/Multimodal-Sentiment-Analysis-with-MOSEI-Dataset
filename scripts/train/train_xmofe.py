@@ -63,6 +63,50 @@ def resolve_device(name: str) -> torch.device:
     return torch.device("cpu")
 
 
+def resolve_class_weights(
+    cw_spec,
+    primary_labels: torch.Tensor,
+    num_classes: int,
+    task: str,
+) -> torch.Tensor | None:
+    """Translate a config-level ``class_weights`` spec into a tensor.
+
+    Supports three forms:
+
+    * ``None`` / missing → return ``None`` (no weighting).
+    * ``"inverse_frequency"`` → compute from training labels at runtime.
+      Weights normalized so ``sum(w) == num_classes`` (≡ uniform if balanced).
+    * ``list[float]`` of length ``num_classes`` → use as-is.
+
+    Silently returns ``None`` for regression tasks regardless of spec, so a
+    single shared loss config can be used across regression/classification
+    datasets without erroring.
+    """
+    if cw_spec is None:
+        return None
+    if task != "classification":
+        return None
+    if isinstance(cw_spec, str):
+        if cw_spec.lower() != "inverse_frequency":
+            raise ValueError(
+                f"unknown class_weights spec {cw_spec!r}; "
+                "expected 'inverse_frequency' or a list of floats"
+            )
+        labels = primary_labels.long()
+        counts = torch.bincount(labels, minlength=num_classes).float()
+        counts = counts.clamp(min=1.0)  # avoid /0 if a class is absent
+        return labels.numel() / (counts * num_classes)
+    if isinstance(cw_spec, (list, tuple)):
+        if len(cw_spec) != num_classes:
+            raise ValueError(
+                f"class_weights list length {len(cw_spec)} != num_classes={num_classes}"
+            )
+        return torch.tensor(list(cw_spec), dtype=torch.float32)
+    raise TypeError(
+        f"class_weights must be None, 'inverse_frequency', or a list; got {type(cw_spec).__name__}"
+    )
+
+
 def build_optimizer(name: str, params, lr: float, weight_decay: float) -> torch.optim.Optimizer:
     name = (name or "adamw").lower()
     if name == "adamw":
@@ -215,7 +259,18 @@ def main() -> None:
         num_classes=config.get("num_classes", 1),
         modality=args.modality,
     ).to(device)
-    loss_fn = XMoFELoss.from_config(loss_config, task=config["task"]).to(device)
+    class_weights = resolve_class_weights(
+        loss_config.get("class_weights"),
+        primary_labels=train_dataset.primary_labels,
+        num_classes=int(config.get("num_classes", 1)),
+        task=config["task"],
+    )
+    if class_weights is not None:
+        class_weights = class_weights.to(device)
+        logger.info(f"class_weights: {[round(float(w), 4) for w in class_weights.cpu().tolist()]}")
+    loss_fn = XMoFELoss.from_config(
+        loss_config, task=config["task"], class_weights=class_weights,
+    ).to(device)
     logger.info(
         f"variant={args.variant}{(' modality=' + args.modality) if args.modality else ''}  "
         f"model params: {sum(p.numel() for p in model.parameters()):,}"

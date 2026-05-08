@@ -1,0 +1,27 @@
+# loss_aux_lite + inverse-frequency class weighting.
+#
+# Combines the over-regularization fix (lighter aux weights) with the
+# imbalance fix (class weights) for MELD's 47%-neutral / 2.6%-fear split.
+# Regression datasets ignore class_weights automatically.
+
+weights:
+  alpha: 0.05
+  beta: 0.10
+  gamma: 0.05
+  delta: 0.01
+
+target_entropy: 0.7
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0
+
+class_weights: inverse_frequency

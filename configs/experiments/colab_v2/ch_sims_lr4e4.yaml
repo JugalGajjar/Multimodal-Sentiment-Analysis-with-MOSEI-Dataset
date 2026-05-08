@@ -1,0 +1,35 @@
+# CH-SIMS v2 sweep: linear LR scaling for batch=64.
+#
+# 4x base for 4x batch. Aggressive — paired with lr2e4 to bracket the
+# right scaling.
+
+dataset: ch_sims
+manifest_dir: data/processed/ch_sims
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 64
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 4.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: ch_sims

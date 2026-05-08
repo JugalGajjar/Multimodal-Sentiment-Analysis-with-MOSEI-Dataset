@@ -1,0 +1,35 @@
+# CH-SIMS v2 sweep: sqrt LR scaling for batch=64.
+#
+# Original v1 LR=1e-4 at batch=64 may be undertrained. sqrt(64/16) = 2x
+# scale gives LR=2e-4. v1 mean MAE=0.487 vs literature ~0.43-0.45.
+
+dataset: ch_sims
+manifest_dir: data/processed/ch_sims
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 64
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 2.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: ch_sims

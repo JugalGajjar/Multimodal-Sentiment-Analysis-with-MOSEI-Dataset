@@ -1,0 +1,39 @@
+# X-MoFE composite loss with auxiliary terms substantially reduced.
+#
+# Default weights (loss.yaml) sum to 0.65 — task loss gets only ~60% of
+# gradient signal at training time. Tier-2 results showed early_fusion
+# (trained with task-only loss = 100% gradient on task) beating X-MoFE on
+# both CH-SIMS and MELD. Hypothesis: the auxiliary losses are
+# over-regularizing the task signal.
+#
+# This config keeps the explanation-objective machinery active (so
+# reliability + interaction + faithfulness are still trainable
+# properties of the model) but at ~3x lighter weights:
+#
+#     alpha=0.05  (5x lighter than 0.20 default)
+#     beta=0.10   (3x lighter than 0.30 default)
+#     gamma=0.05  (2x lighter than 0.10 default)
+#     delta=0.01  (5x lighter than 0.05 default)
+#     total=0.21  (vs 0.65 default — task now gets ~83% of gradient)
+#
+# Pair with class_weights for MELD via loss_aux_lite_cw.yaml.
+
+weights:
+  alpha: 0.05
+  beta: 0.10
+  gamma: 0.05
+  delta: 0.01
+
+target_entropy: 0.7
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0

@@ -275,9 +275,166 @@ def test_trainer_bf16_autocast_runs_on_cpu(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Class weights resolver (train_xmofe.resolve_class_weights)
+# ---------------------------------------------------------------------------
+
+
+def _import_resolve_class_weights():
+    """Import the helper from the train script without invoking main()."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "train_xmofe", REPO_ROOT / "scripts" / "train" / "train_xmofe.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.resolve_class_weights
+
+
+def test_resolve_class_weights_none_returns_none():
+    fn = _import_resolve_class_weights()
+    labels = torch.tensor([0, 1, 2, 0, 1])
+    assert fn(None, primary_labels=labels, num_classes=3, task="classification") is None
+
+
+def test_resolve_class_weights_regression_task_returns_none():
+    """Even with a non-null spec, regression silently skips weighting."""
+    fn = _import_resolve_class_weights()
+    labels = torch.tensor([0.5, -0.2, 1.0])
+    assert fn("inverse_frequency", primary_labels=labels, num_classes=1, task="regression") is None
+
+
+def test_resolve_class_weights_inverse_frequency_balanced():
+    """Balanced labels should produce uniform-ish weights summing to num_classes."""
+    fn = _import_resolve_class_weights()
+    labels = torch.tensor([0, 1, 2, 0, 1, 2])  # 2 of each
+    w = fn("inverse_frequency", primary_labels=labels, num_classes=3, task="classification")
+    assert w.shape == (3,)
+    assert torch.allclose(w, torch.ones(3))   # 6/(2*3) = 1.0 each
+
+
+def test_resolve_class_weights_inverse_frequency_imbalanced():
+    """A 70/20/10 split should give inverse-frequency weights in that order."""
+    fn = _import_resolve_class_weights()
+    labels = torch.tensor([0] * 70 + [1] * 20 + [2] * 10)
+    w = fn("inverse_frequency", primary_labels=labels, num_classes=3, task="classification")
+    # weights = total / (count * num_classes) = 100 / (count * 3)
+    assert w[0] == pytest.approx(100 / (70 * 3), abs=1e-5)
+    assert w[1] == pytest.approx(100 / (20 * 3), abs=1e-5)
+    assert w[2] == pytest.approx(100 / (10 * 3), abs=1e-5)
+    # Rare class gets larger weight
+    assert w[2] > w[1] > w[0]
+
+
+def test_resolve_class_weights_inverse_frequency_handles_absent_class():
+    """Class with zero examples should not blow up — weight clamps to ≤ total/num_classes."""
+    fn = _import_resolve_class_weights()
+    labels = torch.tensor([0, 0, 0, 1, 1])  # class 2 is absent
+    w = fn("inverse_frequency", primary_labels=labels, num_classes=3, task="classification")
+    assert torch.isfinite(w).all()
+    # Class 2 (count clamped to 1): weight = 5 / (1 * 3)
+    assert w[2] == pytest.approx(5 / 3, abs=1e-5)
+
+
+def test_resolve_class_weights_explicit_list():
+    fn = _import_resolve_class_weights()
+    labels = torch.tensor([0, 1, 2])
+    w = fn([1.0, 5.0, 0.5], primary_labels=labels, num_classes=3, task="classification")
+    assert torch.equal(w, torch.tensor([1.0, 5.0, 0.5]))
+
+
+def test_resolve_class_weights_unknown_string_raises():
+    fn = _import_resolve_class_weights()
+    labels = torch.tensor([0, 1])
+    with pytest.raises(ValueError, match="class_weights"):
+        fn("balanced", primary_labels=labels, num_classes=2, task="classification")
+
+
+def test_resolve_class_weights_wrong_length_list_raises():
+    fn = _import_resolve_class_weights()
+    labels = torch.tensor([0, 1, 2])
+    with pytest.raises(ValueError, match="length"):
+        fn([1.0, 2.0], primary_labels=labels, num_classes=3, task="classification")
+
+
+# ---------------------------------------------------------------------------
 # Config sanity — Colab overlays must load cleanly and parity-match the
 # default configs except for the knobs that should differ.
 # ---------------------------------------------------------------------------
+
+
+def test_loss_class_weighted_yaml_sets_inverse_frequency_flag():
+    cfg = REPO_ROOT / "configs" / "training" / "loss_class_weighted.yaml"
+    assert cfg.exists()
+    with cfg.open() as f:
+        data = yaml.safe_load(f)
+    assert data.get("class_weights") == "inverse_frequency"
+    # Auxiliary loss weights should match the default loss.yaml — the only
+    # intentional difference is the class_weights field.
+    base = REPO_ROOT / "configs" / "training" / "loss.yaml"
+    with base.open() as f:
+        base_data = yaml.safe_load(f)
+    assert data["weights"] == base_data["weights"]
+
+
+@pytest.mark.parametrize("name", [
+    "meld_lr2e4", "meld_lr4e4", "meld_lr2e4_cw",
+    "meld_lr2e4_cw_long", "meld_lr2e4_fp32",
+    "meld_lr2e4_aux_lite", "meld_lr2e4_aux_lite_cw",
+    "ch_sims_lr2e4", "ch_sims_lr4e4", "ch_sims_lr2e4_long",
+    "ch_sims_lr2e4_aux_lite",
+    "mosei_lr2e4", "mosei_lr2e4_aux_lite",
+])
+def test_colab_v2_sweep_configs_load(name):
+    """v2 overlays must load and have the knobs they advertise."""
+    cfg_path = REPO_ROOT / "configs" / "experiments" / "colab_v2" / f"{name}.yaml"
+    assert cfg_path.exists()
+    with cfg_path.open() as f:
+        cfg = yaml.safe_load(f)
+    assert "training" in cfg and "optimizer" in cfg["training"]
+    lr = float(cfg["training"]["optimizer"]["lr"])
+    if "lr2e4" in name:
+        assert lr == pytest.approx(2.0e-4)
+    elif "lr4e4" in name:
+        assert lr == pytest.approx(4.0e-4)
+    # Loss-config wiring — most-specific variant first to avoid false matches.
+    if "aux_lite_cw" in name:
+        assert cfg["loss_config"].endswith("loss_aux_lite_cw.yaml")
+    elif "aux_lite" in name:
+        assert cfg["loss_config"].endswith("loss_aux_lite.yaml")
+    elif "_cw" in name:
+        assert cfg["loss_config"].endswith("loss_class_weighted.yaml")
+    if "_long" in name:
+        assert cfg["training"]["num_epochs"] >= 50
+        assert cfg["training"]["early_stopping"]["patience"] >= 10
+    if "_fp32" in name:
+        assert cfg["training"]["precision"] == "fp32"
+    else:
+        # Default for v2 sweep is bf16 — only the explicit fp32 variant differs.
+        assert cfg["training"]["precision"] == "bf16"
+
+
+@pytest.mark.parametrize("loss_file,expect_cw", [
+    ("loss_aux_lite.yaml", False),
+    ("loss_aux_lite_cw.yaml", True),
+])
+def test_loss_aux_lite_yaml_weights_are_lighter(loss_file, expect_cw):
+    """Confirm aux_lite weights are lower than the default loss.yaml."""
+    cfg = REPO_ROOT / "configs" / "training" / loss_file
+    assert cfg.exists()
+    with cfg.open() as f:
+        data = yaml.safe_load(f)
+    base = REPO_ROOT / "configs" / "training" / "loss.yaml"
+    with base.open() as f:
+        base_data = yaml.safe_load(f)
+    for key in ("alpha", "beta", "gamma", "delta"):
+        assert data["weights"][key] < base_data["weights"][key], (
+            f"{loss_file}: {key}={data['weights'][key]} not lighter than "
+            f"base {base_data['weights'][key]}"
+        )
+    if expect_cw:
+        assert data.get("class_weights") == "inverse_frequency"
+    else:
+        assert "class_weights" not in data or data.get("class_weights") is None
 
 
 @pytest.mark.parametrize("dataset", ["mosei", "meld", "ch_sims"])

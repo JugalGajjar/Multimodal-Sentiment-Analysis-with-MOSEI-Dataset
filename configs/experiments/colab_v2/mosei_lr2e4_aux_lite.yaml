@@ -1,0 +1,38 @@
+# MOSEI v2 sweep: sqrt LR + aux_lite weights.
+#
+# v1 was already strong on MOSEI (mean 0.511 — leading literature). MOSEI
+# is the one dataset where X-MoFE wins, so we want to confirm aux_lite
+# doesn't degrade what's already working. If MAE moves by <0.005 either
+# direction, the architecture is robust to aux-weight changes here. If
+# MAE drops further, even better.
+
+dataset: mosei
+manifest_dir: data/processed/mosei
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss_aux_lite.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 16
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 2.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: mosei

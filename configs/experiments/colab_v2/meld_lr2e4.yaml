@@ -1,0 +1,36 @@
+# MELD v2 sweep: sqrt LR scaling for batch=64.
+#
+# Original M4 Pro defaults used LR=1e-4 at batch=16. Colab batch=64 is 4x
+# larger; sqrt(4) = 2x => LR=2e-4. Tests whether the v1 underperformance
+# (val/wF1 ~0.578 vs literature ~0.65) is partly mis-scaled LR.
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 64
+  num_epochs: 25
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 2.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld

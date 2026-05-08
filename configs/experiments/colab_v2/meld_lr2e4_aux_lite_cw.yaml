@@ -1,0 +1,38 @@
+# MELD v2 sweep: full-recipe candidate — sqrt LR + aux_lite + class weights.
+#
+# Combines all three fixes (LR scaling, aux-loss reduction, class weight
+# rebalancing) without extending the training budget. If this matches or
+# beats early_fusion (0.591 wF1) we have a tuned X-MoFE baseline that
+# preserves explainability. Strong candidate for the canonical MELD
+# recipe in the v2 full matrix.
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss_aux_lite_cw.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 64
+  num_epochs: 25
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 2.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld

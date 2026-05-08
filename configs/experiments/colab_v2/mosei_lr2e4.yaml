@@ -1,0 +1,36 @@
+# MOSEI v2 sweep: sqrt LR scaling.
+#
+# v1 was already strong (mean MAE=0.511, leading literature). MOSEI batch
+# went 4 -> 16 (4x), so sqrt scaling => LR=2e-4. Quick check whether more
+# headroom is available, since v1 already beats Self-MM/MISA.
+
+dataset: mosei
+manifest_dir: data/processed/mosei
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 16
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 2.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: mosei
