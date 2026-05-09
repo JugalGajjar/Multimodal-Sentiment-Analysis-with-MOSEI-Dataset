@@ -1,0 +1,17 @@
+# X-MoFE+ model config — same as xmofe.yaml but enables
+# reliability-conditioned interaction gating.
+
+shared_dim: 256
+attention_heads: 4
+dropout: 0.2
+ffn_multiplier: 4
+
+reliability:
+  use_quality_features: false
+  num_quality_features: 0
+  mlp_hidden: 256
+
+interaction:
+  use_trimodal: true
+  mlp_hidden: 256
+  condition_on_reliability: true   # the key change vs xmofe.yaml

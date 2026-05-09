@@ -1,0 +1,34 @@
+# X-MoFE+ experiment on meld: reliability-conditioned interactions
+# (model_config) + modality dropout p=0.15 (trainer flag).
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe_xplus.yaml
+loss_config: configs/training/loss_xplus.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 64
+  num_epochs: 25
+  num_workers: 0
+  precision: bf16
+  modality_dropout_p: 0.15
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld

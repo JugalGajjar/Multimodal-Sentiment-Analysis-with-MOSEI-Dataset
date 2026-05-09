@@ -1,0 +1,27 @@
+# X-MoFE+ training recipe — combines:
+#   1) Reliability-conditioned interaction gating (model-level: see
+#      configs/models/xmofe_xplus.yaml)
+#   2) Modality dropout during training (this file: modality_dropout_p)
+#
+# Loss weights match the default loss.yaml since aux_lite was found
+# neutral in the v2 sweep. Only the training-time augmentation differs.
+
+weights:
+  alpha: 0.2
+  beta: 0.3
+  gamma: 0.1
+  delta: 0.05
+
+target_entropy: 0.7
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0

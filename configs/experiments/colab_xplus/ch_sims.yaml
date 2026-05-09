@@ -1,0 +1,34 @@
+# X-MoFE+ experiment on ch_sims: reliability-conditioned interactions
+# (model_config) + modality dropout p=0.15 (trainer flag).
+
+dataset: ch_sims
+manifest_dir: data/processed/ch_sims
+
+model_config: configs/models/xmofe_xplus.yaml
+loss_config: configs/training/loss_xplus.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 64
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  modality_dropout_p: 0.15
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: ch_sims
