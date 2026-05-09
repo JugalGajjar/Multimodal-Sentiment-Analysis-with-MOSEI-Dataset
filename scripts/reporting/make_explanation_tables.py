@@ -59,10 +59,27 @@ def _build_rows(record: dict) -> list[dict]:
     return rows
 
 
+# Without an explicit --variant filter, prefer the canonical X-MoFE
+# variant whose reliability head is meaningful for explanation analysis
+# (early_fusion / unimodal models have dummy reliability outputs).
+_VARIANT_PREFERENCE = (
+    "xmofe_no_interaction",
+    "xmofe",
+    "xmofe_no_reliability",
+    "xmofe_no_trimodal",
+)
+
+
 def _select_record(records: list[dict], dataset: str, variant: str | None) -> dict | None:
     matches = [r for r in records if r.get("experiment") == dataset]
     if variant is not None:
         matches = [r for r in matches if r.get("variant") == variant]
+        return matches[0] if matches else None
+    for preferred in _VARIANT_PREFERENCE:
+        hits = [r for r in matches if r.get("variant") == preferred]
+        if hits:
+            hits.sort(key=lambda r: r.get("checkpoint", ""))
+            return hits[0]
     return matches[0] if matches else None
 
 

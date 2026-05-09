@@ -59,10 +59,32 @@ def _build_noisy_table(record: dict) -> tuple[list[dict], list[str], list[str]]:
     return rows, columns, headers
 
 
+# When no --variant is specified, prefer the canonical X-MoFE variant whose
+# reliability head is meaningful. Without this preference, the first match
+# alphabetically would be ``early_fusion`` whose reliability outputs are dummy
+# uniform 1/3 values (no real reliability head) — making the ``r_T/r_A/r_V``
+# columns uninformative.
+_VARIANT_PREFERENCE = (
+    "xmofe_no_interaction",   # our canonical choice
+    "xmofe",
+    "xmofe_no_reliability",
+    "xmofe_no_trimodal",
+)
+
+
 def _select_record(records: list[dict], dataset: str, variant: str | None) -> dict | None:
     matches = [r for r in records if r.get("experiment") == dataset]
     if variant is not None:
         matches = [r for r in matches if r.get("variant") == variant]
+        return matches[0] if matches else None
+    # No explicit variant: walk the preference list and pick the first hit.
+    for preferred in _VARIANT_PREFERENCE:
+        hits = [r for r in matches if r.get("variant") == preferred]
+        if hits:
+            # Prefer seed 0 if there are multiple (e.g. xmofe with 3 seeds).
+            hits.sort(key=lambda r: r.get("checkpoint", ""))
+            return hits[0]
+    # Fallback: any match.
     return matches[0] if matches else None
 
 

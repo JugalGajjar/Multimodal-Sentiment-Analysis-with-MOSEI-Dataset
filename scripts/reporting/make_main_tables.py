@@ -62,22 +62,43 @@ def _val_metric(run: dict, key: str) -> float | None:
 
 
 def _experiment_of(run: dict) -> str | None:
-    """Best-effort: split run_name like ``mosei_xmofe_20260507_*`` into dataset prefix."""
+    """Pick out the dataset prefix from the run name.
+
+    Order matters: ``ch_sims`` must be checked before ``mosei``/``meld`` to
+    avoid matching ``ch_sims_*`` as a non-dataset prefix. Returns None for
+    unparseable names (e.g. legacy smoke runs).
+    """
     name = run.get("run_name", "")
-    for ds in DATASET_METRIC_COLUMNS:
-        if name.startswith(ds + "_") or name.startswith(ds):
+    # Sort longest-first so multi-token dataset names match before shorter ones.
+    for ds in sorted(DATASET_METRIC_COLUMNS, key=len, reverse=True):
+        if name.startswith(ds + "_"):
             return ds
     return None
 
 
+_KNOWN_DATASETS = ("ch_sims", "meld", "mosei")
+
+
 def _variant_of(run: dict) -> str:
-    """Best-effort variant tag from run_name (the segment after the dataset)."""
+    """Translate a run name into its variant tag.
+
+    Run-name conventions emitted by ``run_matrix.py``:
+
+    * ``{ds}_xmofe_s{seed}``                                    → "xmofe"
+    * ``{ds}_xmofe_no_{reliability,interaction,trimodal}_s{N}`` → "xmofe_no_*"
+    * ``{ds}_xmofe_no_{faith,stab,entropy}_s{N}``               → that loss-ablation tag
+    * ``{ds}_xmofe_no_reliability_loss_s{N}``                   → "xmofe_no_reliability_loss"
+    * ``{ds}_unimodal_{text,audio,visual}_s{N}``                → "unimodal_<modality>"
+    * ``{ds}_{early,late,hybrid}_fusion_s{N}``                  → "*_fusion"
+    """
+    import re
     name = run.get("run_name", "")
-    parts = name.split("_")
-    if len(parts) >= 2:
-        # Skip the first dataset token
-        return "_".join(parts[1:-2]) if len(parts) >= 3 else parts[1]
-    return name
+    base = re.sub(r"_s\d+$", "", name)
+    for ds in _KNOWN_DATASETS:
+        prefix = f"{ds}_"
+        if base.startswith(prefix):
+            return base[len(prefix):]
+    return base or name
 
 
 def main() -> None:
