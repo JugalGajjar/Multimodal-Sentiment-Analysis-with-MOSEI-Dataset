@@ -3,79 +3,334 @@
 # Per spec §15.3 ("Use official code if possible. If a baseline is too
 # expensive or incompatible: report official/published results separately,
 # clearly mark as 'reported from prior work'"), this file holds numbers
-# imported directly from each baseline's published paper. ``make_main_tables.py``
-# reads them and merges with our own results, tagging their origin so the
-# table caption can mark them as reported (not reproduced).
+# imported directly from each baseline's published paper. Values were
+# verified against the source PDFs in paper/emnlp2026/related_papers/.
 #
-# Fill in the metric values as you cite each paper. Leaving a metric as
-# null tells the formatter to print a dash. Add or remove rows as needed.
+# Keys align with the metric names produced by our Evaluator + collected
+# by scripts/reporting/collect_results.py. Numerical values are in
+# **fractions** (not percentages) to match our pipeline's output:
+#   - mae, pearson_r        — regression metrics, native float
+#   - binary_acc, binary_f1 — Acc-2 / F1-2 expressed as 0.xx
+#   - accuracy, weighted_f1, macro_f1 — classification metrics as 0.xx
+#
+# ============================================================
+# CRITICAL PROTOCOL CAVEATS — read before consuming any number
+# ============================================================
+#
+# 1. MOSEI protocol mismatch.
+#    All cited baselines (TFN, LMF, MFM, MulT, MISA, MAG-BERT, Self-MM,
+#    MMIM, ALMT) evaluate on **utterance-level** CMU-MOSEI:
+#      train=16,326  val=1,871  test=4,659  (total 22,856)
+#    Our X-MoFE setup is **video-level** (~3,225 total). The numbers below
+#    are therefore NOT apples-to-apples with our reported numbers. Either
+#    (a) re-extract features and retrain on the utterance-level split, or
+#    (b) report on video-level and clearly mark the protocol difference
+#        in the paper. RECOMMENDED: paper-level footnote + an extra column
+#        in the table noting "utterance" vs "video" split.
+#
+# 2. CH-SIMS version mismatch.
+#    All cited CH-SIMS baselines evaluate on CH-SIMS v1 (Yu et al. ACL 2020):
+#      train=1,368  val=456  test=457  (total 2,281)
+#    Our setup has train=2,722 — likely CH-SIMS v2 (Yu et al. 2022). VERIFY
+#    before publishing comparisons; the v1 numbers below would need v2
+#    reproductions to be apples-to-apples.
+#
+# 3. MELD protocol matches.
+#    Standard split: train=9,989 utt / val=1,109 / test=2,610 (1,039/114/280
+#    dialogues). Our setup matches.
+#
+# 4. MELD baseline caveat (TEXT-ONLY).
+#    DialogueRNN and DialogueGCN explicitly report TEXT-ONLY numbers per
+#    their own papers. They are commonly cited as multimodal baselines but
+#    technically aren't. Marked "(text-only)" in note fields.
+#
+# 5. Acc-2 / F1-2 convention for MOSEI.
+#    Most papers report two variants:
+#      "negative/non-negative" (zero treated as positive)
+#      "negative/positive"     (zero excluded)
+#    We populate `binary_acc` / `binary_f1` with the *negative/positive*
+#    convention by default since that's what most recent papers (Tsai 2019
+#    onward) emphasize. Where both are reported in the original, the
+#    *negative/non-negative* value is recorded in the note for reference.
 
 mosei:
+  # ----------- Foundational baselines -----------
+  TFN:
+    citation: zadeh2017tensor
+    note: "from MMIM (Han et al. EMNLP 2021) Table 2; BERT-based reproduction"
+    metrics:
+      mae: 0.593
+      pearson_r: 0.700
+      binary_acc: 0.825
+      binary_f1: 0.821
+      acc_7: 0.502
+  LMF:
+    citation: liu2018efficient
+    note: "from MMIM Table 2; BERT-based reproduction"
+    metrics:
+      mae: 0.623
+      pearson_r: 0.677
+      binary_acc: 0.820
+      binary_f1: 0.821
+      acc_7: 0.480
+  MFM:
+    citation: tsai2019learning
+    note: "from MMIM Table 2; BERT-based reproduction"
+    metrics:
+      mae: 0.568
+      pearson_r: 0.717
+      binary_acc: 0.844
+      binary_f1: 0.843
+      acc_7: 0.513
   MulT:
     citation: tsai2019multimodal
-    note: "reported from Tsai et al. ACL 2019, sentence-level CMU-MOSEI"
+    note: "from MMIM Table 2; BERT-based reproduction (negative/positive convention)"
     metrics:
-      mae: null
-      pearson_r: null
-      acc_2: null
-      f1_2: null
-      acc_7: null
-  Self-MM:
-    citation: yu2021learning
-    note: "reported from Yu et al. AAAI 2021"
-    metrics:
-      mae: null
-      pearson_r: null
-      acc_2: null
-      f1_2: null
+      mae: 0.580
+      pearson_r: 0.703
+      binary_acc: 0.825
+      binary_f1: 0.823
       acc_7: null
   MISA:
     citation: hazarika2020misa
-    note: "reported from Hazarika et al. ACM MM 2020"
+    note: "from Self-MM Table 1 + ALMT Table 1 (Hazarika 2020 original numbers; BERT-based). neg/non-neg variant: acc=0.836, f1=0.838. MMIM Table 2 reports a slightly different reproduction (MAE=0.568)."
     metrics:
-      mae: null
-      pearson_r: null
-      acc_2: null
-      f1_2: null
+      mae: 0.555
+      pearson_r: 0.756
+      binary_acc: 0.855
+      binary_f1: 0.853
+      acc_7: 0.522
+  MAG-BERT:
+    citation: rahman2020integrating
+    note: "from MMIM + ALMT tables. neg/non-neg variant: acc=0.8379, f1=0.8374"
+    metrics:
+      mae: 0.539
+      pearson_r: 0.753
+      binary_acc: 0.8523
+      binary_f1: 0.8508
+      acc_7: 0.5267
+  # ----------- Recent strong baselines -----------
+  Self-MM:
+    citation: yu2021learning
+    note: "from MMIM Table 2 (under same conditions). neg/non-neg variant: acc=0.8281, f1=0.8253"
+    metrics:
+      mae: 0.530
+      pearson_r: 0.765
+      binary_acc: 0.8517
+      binary_f1: 0.8530
+      acc_7: 0.5346
+  MMIM:
+    citation: han2021improving
+    note: "from MMIM Table 2 (own paper). neg/non-neg variant: acc=0.8224, f1=0.8266"
+    metrics:
+      mae: 0.526
+      pearson_r: 0.772
+      binary_acc: 0.8597
+      binary_f1: 0.8594
+      acc_7: 0.5424
+  ALMT:
+    citation: zhang2023learning
+    note: "from ALMT Table 1; current SOTA on MOSEI (EMNLP 2023). neg/non-neg variant: acc=0.8478, f1=0.8519"
+    metrics:
+      mae: 0.526
+      pearson_r: 0.779
+      binary_acc: 0.8679
+      binary_f1: 0.8686
+      acc_7: 0.5428
+  # ----------- DFG (CMU-MOSEI dataset paper baseline) -----------
   DFG:
     citation: zadeh2018multimodal
-    note: "Dynamic Fusion Graph; reported with the CMU-MOSEI release"
+    note: "Dynamic Fusion Graph (Graph-MFN row in CMU-MOSEI Table 3). Pre-BERT-era baseline; later BERT-based methods improved substantially over these numbers. Acc-5: 0.451"
     metrics:
-      mae: null
-      pearson_r: null
-      acc_2: null
-      f1_2: null
+      mae: 0.71
+      pearson_r: 0.54
+      binary_acc: 0.769
+      binary_f1: 0.770
+      acc_7: 0.450
 
 meld:
-  MulT:
-    citation: tsai2019multimodal
-    note: "reported numbers if available"
+  # ----------- Text-only baselines (commonly cited as multimodal by convention) -----------
+  bc-LSTM:
+    citation: poria2017context
+    note: "(text-only) from DialogueGCN Table 4 / M2FNet Table 7; treated as multimodal baseline by convention"
     metrics:
       accuracy: null
-      weighted_f1: null
+      weighted_f1: 0.5644
       macro_f1: null
-  Self-MM:
-    citation: yu2021learning
+  DialogueRNN:
+    citation: majumder2019dialoguernn
+    note: "(text-only) per own paper; from M2FNet Table 7"
+    metrics:
+      accuracy: 0.5954
+      weighted_f1: 0.5703
+      macro_f1: null
+  DialogueGCN:
+    citation: ghosal2019dialoguegcn
+    note: "(text-only) per own paper §4.1; from M2FNet Table 6 / DialogueGCN Table 4"
     metrics:
       accuracy: null
-      weighted_f1: null
-  MISA:
-    citation: hazarika2020misa
+      weighted_f1: 0.5810
+      macro_f1: null
+  # ----------- True multimodal MELD baselines -----------
+  Xie-et-al:
+    citation: xie2021multimodal
+    note: "from M2FNet Table 7"
+    metrics:
+      accuracy: 0.6500
+      weighted_f1: 0.6400
+      macro_f1: null
+  DialogueTRM:
+    citation: mao2020dialoguetrm
+    note: "from M2FNet Table 7"
+    metrics:
+      accuracy: 0.6566
+      weighted_f1: 0.6355
+      macro_f1: null
+  M2FNet:
+    citation: chudasama2022m2fnet
+    note: "from M2FNet (own paper) Table 7; current strong MELD baseline (CVPR 2022)"
+    metrics:
+      accuracy: 0.6785
+      weighted_f1: 0.6671
+      macro_f1: null
+  # ----------- Text-strong MELD baselines (text-based ERC literature) -----------
+  COSMIC:
+    citation: ghosal2020cosmic
+    note: "(text-only) from M2FNet Table 6"
     metrics:
       accuracy: null
-      weighted_f1: null
+      weighted_f1: 0.6521
+      macro_f1: null
+  EmoBERTa:
+    citation: kim2021emoberta
+    note: "(text-only) from M2FNet Table 6"
+    metrics:
+      accuracy: null
+      weighted_f1: 0.6561
+      macro_f1: null
+  TODKAT:
+    citation: zhu2021topic
+    note: "(text-only) from M2FNet Table 6"
+    metrics:
+      accuracy: null
+      weighted_f1: 0.6547
+      macro_f1: null
+  EmotionFlow:
+    citation: song2022emotionflow
+    note: "(text-only) from M2FNet Table 6"
+    metrics:
+      accuracy: null
+      weighted_f1: 0.6650
+      macro_f1: null
 
 ch_sims:
+  # CAVEAT: CH-SIMS v1 numbers (2,281 samples). Verify our setup is also v1
+  # before reporting; if v2 (~3,300+ samples), v1 numbers are not directly
+  # comparable.
+  # ----------- From CH-SIMS dataset paper (Yu et al. ACL 2020) -----------
+  EF-LSTM:
+    citation: yu2020chsims
+    note: "from CH-SIMS Table 2; multimodal-only (no unimodal supervision)"
+    metrics:
+      mae: 0.5934
+      pearson_r: -0.0439
+      binary_acc: 0.6937
+      binary_f1: 0.8191
+  MFN:
+    citation: zadeh2018memory
+    note: "from CH-SIMS Table 2"
+    metrics:
+      mae: 0.4519
+      pearson_r: 0.5518
+      binary_acc: 0.7786
+      binary_f1: 0.7822
+  MULT:
+    citation: tsai2019multimodal
+    note: "from CH-SIMS Table 2"
+    metrics:
+      mae: 0.4845
+      pearson_r: 0.5594
+      binary_acc: 0.7794
+      binary_f1: 0.7910
+  TFN:
+    citation: zadeh2017tensor
+    note: "from CH-SIMS Table 2"
+    metrics:
+      mae: 0.4252
+      pearson_r: 0.6118
+      binary_acc: 0.8066
+      binary_f1: 0.8162
+  LMF:
+    citation: liu2018efficient
+    note: "from CH-SIMS Table 2"
+    metrics:
+      mae: 0.4399
+      pearson_r: 0.6000
+      binary_acc: 0.7934
+      binary_f1: 0.7996
+  LF-DNN:
+    citation: yu2020chsims
+    note: "from CH-SIMS Table 2; defined in dataset paper"
+    metrics:
+      mae: 0.4201
+      pearson_r: 0.6123
+      binary_acc: 0.7987
+      binary_f1: 0.8020
+  # ----------- Multi-task variants from CH-SIMS paper (use unimodal labels) -----------
+  MLF-DNN:
+    citation: yu2020chsims
+    note: "from CH-SIMS Table 2; multi-task variant — uses unimodal annotations"
+    metrics:
+      mae: 0.4064
+      pearson_r: 0.6747
+      binary_acc: 0.8228
+      binary_f1: 0.8252
+  MTFN:
+    citation: yu2020chsims
+    note: "from CH-SIMS Table 2; multi-task TFN variant"
+    metrics:
+      mae: 0.4066
+      pearson_r: 0.6698
+      binary_acc: 0.8245
+      binary_f1: 0.8256
+  MLMF:
+    citation: yu2020chsims
+    note: "from CH-SIMS Table 2; multi-task LMF variant"
+    metrics:
+      mae: 0.4203
+      pearson_r: 0.6313
+      binary_acc: 0.8232
+      binary_f1: 0.8266
+  # ----------- Recent strong CH-SIMS baselines -----------
   Self-MM:
     citation: yu2021learning
-    note: "reported on CH-SIMS"
+    note: "from ALMT Table 2 (reproduction by Mao et al. 2022)"
     metrics:
-      mae: null
-      pearson_r: null
-      acc_2: null
-      f1_2: null
+      mae: 0.425
+      pearson_r: 0.595
+      binary_acc: 0.8004
+      binary_f1: 0.8044
   MISA:
     citation: hazarika2020misa
+    note: "from ALMT Table 2 (reproduction)"
     metrics:
-      mae: null
-      pearson_r: null
+      mae: 0.447
+      pearson_r: 0.557
+      binary_acc: 0.7654
+      binary_f1: 0.7659
+  MAG-BERT:
+    citation: rahman2020integrating
+    note: "from ALMT Table 2"
+    metrics:
+      mae: 0.492
+      pearson_r: 0.399
+      binary_acc: 0.7444
+      binary_f1: 0.7175
+  ALMT:
+    citation: zhang2023learning
+    note: "from ALMT Table 2 (own paper); current strong CH-SIMS baseline (EMNLP 2023)"
+    metrics:
+      mae: 0.404
+      pearson_r: 0.619
+      binary_acc: 0.8119
+      binary_f1: 0.8157
