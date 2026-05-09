@@ -86,6 +86,7 @@ class XMoFE(nn.Module):
         ffn_multiplier: int = 4,
         reliability_mlp_hidden: int = 256,
         interaction_mlp_hidden: int = 256,
+        condition_interaction_on_reliability: bool = False,
     ) -> None:
         super().__init__()
 
@@ -93,6 +94,7 @@ class XMoFE(nn.Module):
         self.use_trimodal = use_trimodal
         self.use_reliability_gate = use_reliability_gate
         self.use_interaction_block = use_interaction_block
+        self.condition_interaction_on_reliability = condition_interaction_on_reliability
         self.task = task
 
         # Projections
@@ -119,6 +121,7 @@ class XMoFE(nn.Module):
                 num_interactions,
                 mlp_hidden=interaction_mlp_hidden,
                 dropout=dropout,
+                condition_on_reliability=condition_interaction_on_reliability,
             )
             self.interaction_names = (
                 (*PAIRWISE_INTERACTIONS, TRIMODAL_INTERACTION) if use_trimodal else PAIRWISE_INTERACTIONS
@@ -180,6 +183,7 @@ class XMoFE(nn.Module):
             ffn_multiplier=config.get("ffn_multiplier", 4),
             reliability_mlp_hidden=rel.get("mlp_hidden", 256),
             interaction_mlp_hidden=inter.get("mlp_hidden", 256),
+            condition_interaction_on_reliability=inter.get("condition_on_reliability", False),
         )
 
     def forward(
@@ -221,8 +225,13 @@ class XMoFE(nn.Module):
                 interaction_vecs: tuple[torch.Tensor, ...] = (c_ta, c_tv, c_av, c_tav)
             else:
                 interaction_vecs = (c_ta, c_tv, c_av)
-            # 5. Interaction-contribution weights → interaction-level explanation
-            lam = self.interaction_estimator(*interaction_vecs)     # (B, K)
+            # 5. Interaction-contribution weights → interaction-level explanation.
+            # When the estimator is conditioned on reliability, feed r so the
+            # interaction weights can adapt to per-sample modality reliability.
+            if self.condition_interaction_on_reliability:
+                lam = self.interaction_estimator(*interaction_vecs, reliability=r)
+            else:
+                lam = self.interaction_estimator(*interaction_vecs)     # (B, K)
             i = sum(lam[:, k:k + 1] * v for k, v in enumerate(interaction_vecs))
         else:
             # xmofe_no_interaction ablation: drop cross-modal evidence

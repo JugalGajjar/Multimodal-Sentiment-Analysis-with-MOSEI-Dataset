@@ -108,7 +108,20 @@ class TriModalInteraction(nn.Module):
 
 
 class InteractionEstimator(nn.Module):
-    """``λ = softmax(MLP_I([c_TA; c_TV; c_AV; c_TAV]))`` — the interaction-level explanation."""
+    """``λ = softmax(MLP_I([c_TA; c_TV; c_AV; c_TAV; r?]))`` — interaction-level explanation.
+
+    When ``condition_on_reliability=True``, the per-modality reliability
+    vector ``r ∈ R^3`` is concatenated to the interaction-vector input
+    before the MLP. This lets the interaction weights ``λ`` adapt based
+    on which modalities are reliable: e.g. if text is unreliable, the
+    estimator can downweight every interaction involving text
+    (``c_TA``, ``c_TV``, ``c_TAV``).
+
+    Backwards-compatible: leaving the flag at its default ``False``
+    reproduces the original behaviour exactly.
+    """
+
+    NUM_RELIABILITY_INPUTS = 3   # text, audio, visual
 
     def __init__(
         self,
@@ -116,22 +129,43 @@ class InteractionEstimator(nn.Module):
         num_interactions: int,
         mlp_hidden: int = 256,
         dropout: float = 0.2,
+        condition_on_reliability: bool = False,
     ) -> None:
         super().__init__()
         self.num_interactions = num_interactions
+        self.condition_on_reliability = condition_on_reliability
+        input_dim = shared_dim * num_interactions
+        if condition_on_reliability:
+            input_dim += self.NUM_RELIABILITY_INPUTS
         self.mlp = nn.Sequential(
-            nn.Linear(shared_dim * num_interactions, mlp_hidden),
+            nn.Linear(input_dim, mlp_hidden),
             nn.LayerNorm(mlp_hidden),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(mlp_hidden, num_interactions),
         )
 
-    def forward(self, *interaction_vectors: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        *interaction_vectors: torch.Tensor,
+        reliability: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if len(interaction_vectors) != self.num_interactions:
             raise ValueError(
                 f"expected {self.num_interactions} interaction vectors, "
                 f"got {len(interaction_vectors)}"
             )
         x = torch.cat(interaction_vectors, dim=-1)
+        if self.condition_on_reliability:
+            if reliability is None:
+                raise ValueError(
+                    "condition_on_reliability=True but no reliability tensor was passed; "
+                    "call forward(... , reliability=r)"
+                )
+            if reliability.shape[-1] != self.NUM_RELIABILITY_INPUTS:
+                raise ValueError(
+                    f"reliability must have last dim {self.NUM_RELIABILITY_INPUTS}; "
+                    f"got shape {tuple(reliability.shape)}"
+                )
+            x = torch.cat([x, reliability], dim=-1)
         return F.softmax(self.mlp(x), dim=-1)

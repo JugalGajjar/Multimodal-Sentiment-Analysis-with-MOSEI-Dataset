@@ -326,3 +326,101 @@ def test_real_meld_cache_flow(config):
     assert not torch.isnan(out.prediction).any()
     # Backward through cross-entropy on real labels.
     F.cross_entropy(out.prediction, manifest["primary_labels"][idx]).backward()
+
+
+# ---------------------------------------------------------------------------
+# Reliability-conditioned interaction estimator (improvement #1)
+# ---------------------------------------------------------------------------
+
+
+def test_interaction_estimator_default_does_not_require_reliability():
+    """Backwards-compat: with condition_on_reliability=False, the old
+    forward signature still works with no reliability tensor."""
+    from src.models.interaction import InteractionEstimator
+    est = InteractionEstimator(shared_dim=8, num_interactions=4)
+    vecs = [torch.randn(2, 8) for _ in range(4)]
+    lam = est(*vecs)
+    assert lam.shape == (2, 4)
+    assert torch.allclose(lam.sum(dim=-1), torch.ones(2))
+
+
+def test_interaction_estimator_conditioned_accepts_reliability():
+    from src.models.interaction import InteractionEstimator
+    est = InteractionEstimator(shared_dim=8, num_interactions=4, condition_on_reliability=True)
+    vecs = [torch.randn(2, 8) for _ in range(4)]
+    r = torch.tensor([[0.5, 0.3, 0.2], [0.1, 0.8, 0.1]])
+    lam = est(*vecs, reliability=r)
+    assert lam.shape == (2, 4)
+    assert torch.allclose(lam.sum(dim=-1), torch.ones(2), atol=1e-5)
+
+
+def test_interaction_estimator_conditioned_raises_without_reliability():
+    from src.models.interaction import InteractionEstimator
+    est = InteractionEstimator(shared_dim=8, num_interactions=4, condition_on_reliability=True)
+    vecs = [torch.randn(2, 8) for _ in range(4)]
+    with pytest.raises(ValueError, match="reliability"):
+        est(*vecs)
+
+
+def test_interaction_estimator_conditioned_rejects_wrong_reliability_shape():
+    from src.models.interaction import InteractionEstimator
+    est = InteractionEstimator(shared_dim=8, num_interactions=4, condition_on_reliability=True)
+    vecs = [torch.randn(2, 8) for _ in range(4)]
+    bad_r = torch.randn(2, 5)   # wrong last dim
+    with pytest.raises(ValueError, match="last dim"):
+        est(*vecs, reliability=bad_r)
+
+
+def test_xmofe_with_conditioned_interactions_forward_and_backward():
+    """End-to-end: XMoFE with condition_interaction_on_reliability=True
+    runs forward + backward and produces valid lam summing to 1."""
+    torch.manual_seed(0)
+    model = XMoFE(
+        text_dim=64, audio_dim=64, visual_dim=64,
+        num_classes=3, task="classification",
+        shared_dim=32, attention_heads=2, dropout=0.1,
+        condition_interaction_on_reliability=True,
+    )
+    batch = {
+        "text": torch.randn(4, 8, 64),
+        "audio": torch.randn(4, 8, 64),
+        "visual": torch.randn(4, 8, 64),
+        "text_length": torch.tensor([5, 8, 3, 7]),
+        "audio_length": torch.tensor([4, 8, 6, 5]),
+        "visual_length": torch.tensor([8, 7, 8, 6]),
+    }
+    labels = torch.tensor([0, 2, 1, 0])
+    out = model(**batch)
+    assert out.prediction.shape == (4, 3)
+    assert out.interactions.shape == (4, 4)
+    assert torch.allclose(out.interactions.sum(dim=-1), torch.ones(4), atol=1e-5)
+    F.cross_entropy(out.prediction, labels).backward()
+    # InteractionEstimator's first linear layer must have absorbed the +3
+    # input dimension from the reliability concatenation.
+    first_linear = model.interaction_estimator.mlp[0]
+    expected_in = 32 * 4 + 3  # shared_dim * num_interactions + reliability dim
+    assert first_linear.in_features == expected_in
+
+
+def test_xmofe_default_interaction_estimator_unchanged():
+    """When the flag is off, the interaction estimator's input dim
+    matches the original (no reliability concatenation)."""
+    model = XMoFE(text_dim=64, audio_dim=64, visual_dim=64,
+                  num_classes=1, task="regression",
+                  shared_dim=32, attention_heads=2, dropout=0.1)
+    first_linear = model.interaction_estimator.mlp[0]
+    assert first_linear.in_features == 32 * 4   # shared_dim * num_interactions, no +3
+
+
+def test_xmofe_from_config_reads_condition_on_reliability_flag(config):
+    """Config-level `interaction.condition_on_reliability: true` propagates."""
+    cfg = dict(config)
+    cfg["interaction"] = dict(cfg.get("interaction") or {})
+    cfg["interaction"]["condition_on_reliability"] = True
+    model = XMoFE.from_config(cfg, text_dim=128, audio_dim=128, visual_dim=128,
+                              task="regression", num_classes=1)
+    assert model.condition_interaction_on_reliability is True
+    # With the flag off (default), the previously-built model should not have it.
+    model_default = XMoFE.from_config(config, text_dim=128, audio_dim=128, visual_dim=128,
+                                      task="regression", num_classes=1)
+    assert model_default.condition_interaction_on_reliability is False
