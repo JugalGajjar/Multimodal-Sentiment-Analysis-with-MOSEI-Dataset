@@ -78,6 +78,11 @@ class Evaluator:
                     "text", "audio", "visual",
                     "text_length", "audio_length", "visual_length",
                     "quality",
+                    # Phase-1 fine-tuning: when the model owns a trainable text
+                    # encoder, it consumes raw transcripts in-graph at val/test
+                    # time too. Without this key being forwarded the fine-tuned
+                    # model would silently fall back to stale cached features.
+                    "transcripts",
                 }
             }
             out = model(**inputs)
