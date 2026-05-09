@@ -95,6 +95,99 @@ class _DeviceLoader:
         return len(self.loader)
 
 
+def run_explanations_eval(
+    *,
+    model: torch.nn.Module,
+    loader,
+    task: str,
+    device: torch.device,
+    experiment: str,
+    variant: str,
+    modality: str | None,
+    split: str,
+    seed: int,
+    checkpoint_path: Path,
+    output_path: Path,
+    k_fraction: float = DEFAULT_K_FRACTION,
+    max_batches: int | None = None,
+) -> dict[str, Any]:
+    """Run the spec §17 explanation suite against an already-built model + loader.
+
+    Accepts a raw torch dataloader; wraps it internally with ``_DeviceLoader``.
+    Writes the JSON report and returns the results dict.
+    """
+    device_loader = _DeviceLoader(loader, device)
+
+    results: dict[str, Any] = {
+        "experiment": experiment,
+        "variant": variant,
+        "modality": modality,
+        "checkpoint": str(checkpoint_path),
+        "split": split,
+        "task": task,
+        "k_fraction": k_fraction,
+        "k_fractions_curve": list(DEFAULT_K_FRACTIONS),
+        "device": str(device),
+        "max_batches": max_batches,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+    # ---- Modality-level faithfulness (§17.1) ------------------------
+    log.info("modality faithfulness (§17.1)...")
+    results["modality_faithfulness"] = modality_faithfulness(
+        model, device_loader, task=task, max_batches=max_batches,
+    )
+
+    # ---- Temporal deletion / insertion (§17.2 + §17.3) --------------
+    deletion: dict[str, Any] = {}
+    insertion: dict[str, Any] = {}
+    for m in VALID_MODALITIES:
+        log.info("deletion %s (§17.2)...", m)
+        deletion[m] = deletion_curve(
+            model, device_loader, task=task, modality=m, max_batches=max_batches,
+        )
+        log.info("insertion %s (§17.3)...", m)
+        insertion[m] = insertion_curve(
+            model, device_loader, task=task, modality=m, max_batches=max_batches,
+        )
+    results["deletion"] = deletion
+    results["insertion"] = insertion
+
+    # ---- Sufficiency / comprehensiveness (§17.4 + §17.5) ------------
+    suff: dict[str, Any] = {}
+    comp: dict[str, Any] = {}
+    for m in VALID_MODALITIES:
+        suff[m] = sufficiency(
+            model, device_loader, task=task, modality=m,
+            k_fraction=k_fraction, max_batches=max_batches,
+        )
+        comp[m] = comprehensiveness(
+            model, device_loader, task=task, modality=m,
+            k_fraction=k_fraction, max_batches=max_batches,
+        )
+    results["sufficiency"] = suff
+    results["comprehensiveness"] = comp
+
+    # ---- CH-SIMS reliability alignment (§17.6) ----------------------
+    align = chsims_reliability_alignment(model, device_loader, max_batches=max_batches)
+    if align is not None:
+        results["chsims_reliability_alignment"] = align
+        log.info(
+            "CH-SIMS reliability alignment: spearman=%.3f kl=%.3f top1=%.3f",
+            align["spearman"], align["kl_rstar_to_r_mean"], align["top1_agreement"],
+        )
+    else:
+        log.info("dataset has no unimodal labels — skipping CH-SIMS reliability alignment")
+        results["chsims_reliability_alignment"] = None
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, default=lambda o: float(o) if hasattr(o, "item") else str(o))
+        f.write("\n")
+    log.info("wrote %s", output_path)
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--experiment", required=True)
@@ -122,7 +215,6 @@ def main() -> None:
 
     manifest_path = REPO_ROOT / config["manifest_dir"] / f"{args.split}.pt"
     raw_loader = make_dataloader(manifest_path, batch_size=args.batch_size, shuffle=False)
-    loader = _DeviceLoader(raw_loader, device)
     feature_dims = raw_loader.dataset.feature_dims
     log.info(
         "experiment=%s split=%s n=%d dims=text:%d audio:%d visual:%d device=%s",
@@ -142,76 +234,15 @@ def main() -> None:
         payload.get("epoch"), payload.get("best_metric"),
     )
 
-    results: dict[str, Any] = {
-        "experiment": args.experiment,
-        "variant": args.variant,
-        "modality": args.modality,
-        "checkpoint": str(args.checkpoint),
-        "split": args.split,
-        "task": config["task"],
-        "k_fraction": args.k_fraction,
-        "k_fractions_curve": list(DEFAULT_K_FRACTIONS),
-        "device": str(device),
-        "max_batches": args.max_batches,
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-
-    # ---- Modality-level faithfulness (§17.1) ------------------------
-    log.info("modality faithfulness (§17.1)...")
-    results["modality_faithfulness"] = modality_faithfulness(
-        model, loader, task=config["task"], max_batches=args.max_batches,
-    )
-
-    # ---- Temporal deletion / insertion (§17.2 + §17.3) --------------
-    deletion: dict[str, Any] = {}
-    insertion: dict[str, Any] = {}
-    for modality in VALID_MODALITIES:
-        log.info("deletion %s (§17.2)...", modality)
-        deletion[modality] = deletion_curve(
-            model, loader, task=config["task"], modality=modality, max_batches=args.max_batches,
-        )
-        log.info("insertion %s (§17.3)...", modality)
-        insertion[modality] = insertion_curve(
-            model, loader, task=config["task"], modality=modality, max_batches=args.max_batches,
-        )
-    results["deletion"] = deletion
-    results["insertion"] = insertion
-
-    # ---- Sufficiency / comprehensiveness (§17.4 + §17.5) ------------
-    suff: dict[str, Any] = {}
-    comp: dict[str, Any] = {}
-    for modality in VALID_MODALITIES:
-        suff[modality] = sufficiency(
-            model, loader, task=config["task"], modality=modality,
-            k_fraction=args.k_fraction, max_batches=args.max_batches,
-        )
-        comp[modality] = comprehensiveness(
-            model, loader, task=config["task"], modality=modality,
-            k_fraction=args.k_fraction, max_batches=args.max_batches,
-        )
-    results["sufficiency"] = suff
-    results["comprehensiveness"] = comp
-
-    # ---- CH-SIMS reliability alignment (§17.6) ----------------------
-    align = chsims_reliability_alignment(model, loader, max_batches=args.max_batches)
-    if align is not None:
-        results["chsims_reliability_alignment"] = align
-        log.info(
-            "CH-SIMS reliability alignment: spearman=%.3f kl=%.3f top1=%.3f",
-            align["spearman"], align["kl_rstar_to_r_mean"], align["top1_agreement"],
-        )
-    else:
-        log.info("dataset has no unimodal labels — skipping CH-SIMS reliability alignment")
-        results["chsims_reliability_alignment"] = None
-
-    # ---- Persist ----------------------------------------------------
     run_name = args.checkpoint.parent.name
     output_path = args.output or (REPO_ROOT / "results" / f"explanations_{run_name}.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, default=lambda o: float(o) if hasattr(o, "item") else str(o))
-        f.write("\n")
-    log.info("wrote %s", output_path)
+    run_explanations_eval(
+        model=model, loader=raw_loader, task=config["task"], device=device,
+        experiment=args.experiment, variant=args.variant, modality=args.modality,
+        split=args.split, seed=args.seed,
+        checkpoint_path=args.checkpoint, output_path=output_path,
+        k_fraction=args.k_fraction, max_batches=args.max_batches,
+    )
 
 
 if __name__ == "__main__":

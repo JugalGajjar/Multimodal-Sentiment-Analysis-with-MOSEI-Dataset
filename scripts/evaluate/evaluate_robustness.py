@@ -117,6 +117,104 @@ def compute_drops(
     return drops
 
 
+def run_robustness_eval(
+    *,
+    model: torch.nn.Module,
+    loader,
+    task: str,
+    num_classes: int,
+    device: torch.device,
+    experiment: str,
+    variant: str,
+    modality: str | None,
+    split: str,
+    severity: str,
+    seed: int,
+    checkpoint_path: Path,
+    output_path: Path,
+) -> dict[str, Any]:
+    """Run the spec §16 robustness battery against an already-built model + loader.
+
+    Extracted from ``main`` so a multi-checkpoint wrapper can re-use a single
+    dataset cache across many checkpoints. Writes the JSON report and returns
+    the results dict.
+    """
+    evaluator = Evaluator(task=task, num_classes=num_classes, device=device)
+    metric_name, mode = primary_metric_for(task)
+
+    results: dict[str, Any] = {
+        "experiment": experiment,
+        "variant": variant,
+        "modality": modality,
+        "checkpoint": str(checkpoint_path),
+        "split": split,
+        "severity": severity,
+        "seed": seed,
+        "device": str(device),
+        "primary_metric": metric_name,
+        "task": task,
+        "missing_modality": {},
+        "noisy_modality": {},
+        "summary": {},
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+    # ---- Missing modality conditions --------------------------------
+    log.info("running missing-modality conditions: %d", len(MISSING_CONDITIONS))
+    for name, drop in MISSING_CONDITIONS:
+        wrapped = _TransformedLoader(loader, lambda batch, d=drop: apply_missing(batch, d))
+        metrics = evaluator(model, wrapped)
+        results["missing_modality"][name] = metrics
+        log.info("[missing/%s] %s=%.4f", name, metric_name, metrics.get(metric_name, float("nan")))
+
+    # ---- Noisy modality conditions ----------------------------------
+    log.info("running noisy-modality conditions at severity=%s", severity)
+    for m in VALID_MODALITIES:
+        gen = torch.Generator(device="cpu").manual_seed(seed)
+        wrapped = _TransformedLoader(
+            loader,
+            lambda batch, m=m, g=gen: apply_noise(batch, m, severity, generator=g),
+        )
+        metrics = evaluator(model, wrapped)
+        key = f"{m}_{severity}"
+        results["noisy_modality"][key] = metrics
+        log.info("[noisy/%s] %s=%.4f", key, metric_name, metrics.get(metric_name, float("nan")))
+
+    # ---- Summary block ----------------------------------------------
+    clean = results["missing_modality"]["clean"]
+    missing_drops = compute_drops(
+        clean,
+        {k: v for k, v in results["missing_modality"].items() if k != "clean"},
+        metric_name, mode,
+    )
+    noisy_drops = compute_drops(clean, results["noisy_modality"], metric_name, mode)
+
+    results["summary"]["missing_avg_drop"] = (
+        sum(missing_drops) / len(missing_drops) if missing_drops else 0.0
+    )
+    results["summary"]["noisy_avg_drop"] = (
+        sum(noisy_drops) / len(noisy_drops) if noisy_drops else 0.0
+    )
+
+    for m in VALID_MODALITIES:
+        clean_r = clean.get(f"reliability_mean_{m}")
+        miss_r = results["missing_modality"][f"{m}_missing"].get(f"reliability_mean_{m}")
+        if clean_r is not None and miss_r is not None:
+            results["summary"][f"reliability_adaptation_{m}_missing"] = miss_r - clean_r
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, default=lambda o: float(o) if hasattr(o, "item") else str(o))
+        f.write("\n")
+    log.info("wrote %s", output_path)
+    log.info(
+        "summary: missing_avg_drop=%.4f noisy_avg_drop=%.4f",
+        results["summary"]["missing_avg_drop"],
+        results["summary"]["noisy_avg_drop"],
+    )
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--experiment", required=True, help="Name under configs/experiments/.")
@@ -161,83 +259,15 @@ def main() -> None:
         payload.get("epoch"), payload.get("best_metric"),
     )
 
-    evaluator = Evaluator(task=config["task"], num_classes=config.get("num_classes", 1), device=device)
-    metric_name, mode = primary_metric_for(config["task"])
-
-    results: dict[str, Any] = {
-        "experiment": args.experiment,
-        "variant": args.variant,
-        "modality": args.modality,
-        "checkpoint": str(args.checkpoint),
-        "split": args.split,
-        "severity": args.severity,
-        "seed": args.seed,
-        "device": str(device),
-        "primary_metric": metric_name,
-        "task": config["task"],
-        "missing_modality": {},
-        "noisy_modality": {},
-        "summary": {},
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-
-    # ---- Missing modality conditions --------------------------------
-    log.info("running missing-modality conditions: %d", len(MISSING_CONDITIONS))
-    for name, drop in MISSING_CONDITIONS:
-        wrapped = _TransformedLoader(loader, lambda batch, d=drop: apply_missing(batch, d))
-        metrics = evaluator(model, wrapped)
-        results["missing_modality"][name] = metrics
-        log.info("[missing/%s] %s=%.4f", name, metric_name, metrics.get(metric_name, float("nan")))
-
-    # ---- Noisy modality conditions ----------------------------------
-    log.info("running noisy-modality conditions at severity=%s", args.severity)
-    # Use a stable seed so re-runs are reproducible per modality.
-    for modality in VALID_MODALITIES:
-        gen = torch.Generator(device="cpu").manual_seed(args.seed)
-        wrapped = _TransformedLoader(
-            loader,
-            lambda batch, m=modality, g=gen: apply_noise(batch, m, args.severity, generator=g),
-        )
-        metrics = evaluator(model, wrapped)
-        key = f"{modality}_{args.severity}"
-        results["noisy_modality"][key] = metrics
-        log.info("[noisy/%s] %s=%.4f", key, metric_name, metrics.get(metric_name, float("nan")))
-
-    # ---- Summary block ----------------------------------------------
-    clean = results["missing_modality"]["clean"]
-    missing_drops = compute_drops(
-        clean,
-        {k: v for k, v in results["missing_modality"].items() if k != "clean"},
-        metric_name, mode,
-    )
-    noisy_drops = compute_drops(clean, results["noisy_modality"], metric_name, mode)
-
-    results["summary"]["missing_avg_drop"] = (
-        sum(missing_drops) / len(missing_drops) if missing_drops else 0.0
-    )
-    results["summary"]["noisy_avg_drop"] = (
-        sum(noisy_drops) / len(noisy_drops) if noisy_drops else 0.0
-    )
-
-    # Reliability adaptation: Δ on r_m when modality m is dropped.
-    for m in VALID_MODALITIES:
-        clean_r = clean.get(f"reliability_mean_{m}")
-        miss_r = results["missing_modality"][f"{m}_missing"].get(f"reliability_mean_{m}")
-        if clean_r is not None and miss_r is not None:
-            results["summary"][f"reliability_adaptation_{m}_missing"] = miss_r - clean_r
-
-    # ---- Persist -----------------------------------------------------
     run_name = args.checkpoint.parent.name
     output_path = args.output or (REPO_ROOT / "results" / f"robustness_{run_name}.json")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, default=lambda o: float(o) if hasattr(o, "item") else str(o))
-        f.write("\n")
-    log.info("wrote %s", output_path)
-    log.info(
-        "summary: missing_avg_drop=%.4f noisy_avg_drop=%.4f",
-        results["summary"]["missing_avg_drop"],
-        results["summary"]["noisy_avg_drop"],
+    run_robustness_eval(
+        model=model, loader=loader,
+        task=config["task"], num_classes=config.get("num_classes", 1),
+        device=device,
+        experiment=args.experiment, variant=args.variant, modality=args.modality,
+        split=args.split, severity=args.severity, seed=args.seed,
+        checkpoint_path=args.checkpoint, output_path=output_path,
     )
 
 
