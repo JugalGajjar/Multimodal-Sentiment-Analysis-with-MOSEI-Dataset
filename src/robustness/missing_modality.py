@@ -44,4 +44,11 @@ def apply_missing(
         if length_key not in batch:
             raise KeyError(f"batch missing {length_key!r}")
         out[length_key] = torch.zeros_like(batch[length_key])
+        # If text is being marked missing AND the batch carries raw
+        # transcripts (Phase-1 fine-tuning path), we must also empty the
+        # transcripts. Otherwise an in-graph encoder would still encode the
+        # original text and re-introduce it through the encoder pathway,
+        # silently defeating the missing-modality condition.
+        if m == "text" and "transcripts" in batch:
+            out["transcripts"] = ["" for _ in batch["transcripts"]]
     return out
