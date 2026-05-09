@@ -14,6 +14,15 @@ expect:
                                              (CH-SIMS only — absent otherwise)
         "sample_ids":                        list[str]             length B
         "rich_labels":                       list[dict]            length B
+        "transcripts":                       list[str]             length B
+                                             (only when manifest carries the
+                                             post-patch_manifests_with_text
+                                             ``transcripts`` field — needed
+                                             for end-to-end fine-tuning)
+        "speaker_ids", "dialogue_ids",
+        "utterance_indices":                 list[str|int|None]
+                                             (Phase-3 dialogue context;
+                                             present iff manifest carries them)
     }
 
 Caches are stored in fp16; the collate cast lifts batches to fp32 because
@@ -68,6 +77,18 @@ class XMoFEDataset(Dataset):
         self.primary_labels: torch.Tensor = self.manifest["primary_labels"]
         self.rich_labels: list[dict] = list(self.manifest["labels"])
 
+        # Optional fields added by ``scripts/data/patch_manifests_with_text.py``.
+        # Present when the manifest has been patched for fine-tuning / Phase 3
+        # dialogue modelling; absent on un-patched legacy manifests, in which
+        # case downstream code falls back to the cached-feature path.
+        self.transcripts: list[str] | None = self.manifest.get("transcripts")
+        self.speaker_ids: list | None = self.manifest.get("speaker_ids")
+        self.dialogue_ids: list | None = self.manifest.get("dialogue_ids")
+        self.utterance_indices: list | None = self.manifest.get("utterance_indices")
+        self.has_transcripts = (
+            self.transcripts is not None and len(self.transcripts) == len(self.sample_ids)
+        )
+
         # Decide once whether this dataset carries unimodal annotations
         # (CH-SIMS does; MELD/MOSEI do not).
         first_label = self.rich_labels[0] if self.rich_labels else {}
@@ -96,6 +117,14 @@ class XMoFEDataset(Dataset):
                 [float(rich[k]) for k in UNIMODAL_LABEL_KEYS],
                 dtype=torch.float32,
             )
+        if self.has_transcripts:
+            item["transcript"] = self.transcripts[idx]
+            if self.speaker_ids is not None:
+                item["speaker_id"] = self.speaker_ids[idx]
+            if self.dialogue_ids is not None:
+                item["dialogue_id"] = self.dialogue_ids[idx]
+            if self.utterance_indices is not None:
+                item["utterance_index"] = self.utterance_indices[idx]
         return item
 
 
@@ -119,6 +148,18 @@ def collate_xmofe(batch: list[dict[str, Any]]) -> dict[str, Any]:
 
     if "unimodal_labels" in batch[0]:
         out["unimodal_labels"] = torch.stack([item["unimodal_labels"] for item in batch])
+
+    # Optional fields populated only when the manifest carries them
+    # (post-``patch_manifests_with_text``). Lists rather than stacked tensors
+    # because they're heterogeneous text/identifiers, not features.
+    if "transcript" in batch[0]:
+        out["transcripts"] = [item["transcript"] for item in batch]
+    if "speaker_id" in batch[0]:
+        out["speaker_ids"] = [item["speaker_id"] for item in batch]
+    if "dialogue_id" in batch[0]:
+        out["dialogue_ids"] = [item["dialogue_id"] for item in batch]
+    if "utterance_index" in batch[0]:
+        out["utterance_indices"] = [item["utterance_index"] for item in batch]
 
     return out
 
