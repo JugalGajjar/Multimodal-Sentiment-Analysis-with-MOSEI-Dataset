@@ -153,11 +153,12 @@ class Trainer:
                 out[k] = v
         return out
 
-    def _model_inputs(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
+    def _model_inputs(self, batch: dict[str, Any]) -> dict[str, Any]:
         keys = {
             "text", "audio", "visual",
             "text_length", "audio_length", "visual_length",
             "quality",
+            "transcripts",   # raw text for in-graph fine-tuning (Phase 1)
         }
         return {k: v for k, v in batch.items() if k in keys}
 

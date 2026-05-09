@@ -107,14 +107,70 @@ def resolve_class_weights(
     )
 
 
-def build_optimizer(name: str, params, lr: float, weight_decay: float) -> torch.optim.Optimizer:
+def _split_encoder_params(model: torch.nn.Module) -> tuple[list, list]:
+    """Partition ``model.parameters()`` into (encoder_params, head_params).
+
+    The text-encoder, when present, lives at ``model.text_encoder``. Returns
+    two lists of parameters that PyTorch optimizers accept as separate
+    parameter groups (so the encoder can get its own LR / weight decay).
+    Encoder list is empty when the model has no text encoder.
+    """
+    encoder_params: list[torch.nn.Parameter] = []
+    head_params: list[torch.nn.Parameter] = []
+    text_enc = getattr(model, "text_encoder", None)
+    if text_enc is None:
+        head_params = [p for p in model.parameters() if p.requires_grad]
+        return encoder_params, head_params
+    encoder_param_set = set(id(p) for p in text_enc.parameters())
+    for p in model.parameters():
+        if not p.requires_grad:
+            continue
+        if id(p) in encoder_param_set:
+            encoder_params.append(p)
+        else:
+            head_params.append(p)
+    return encoder_params, head_params
+
+
+def build_optimizer(
+    name: str,
+    model: torch.nn.Module,
+    lr: float,
+    weight_decay: float,
+    *,
+    encoder_lr: float | None = None,
+    encoder_weight_decay: float | None = None,
+) -> torch.optim.Optimizer:
+    """Build an optimizer with optional separate encoder param group.
+
+    When ``encoder_lr`` is provided AND the model owns a trainable text
+    encoder, the encoder gets its own LR / weight decay group. Standard
+    practice for fine-tuning: head LR (1e-4) is much higher than encoder LR
+    (1e-5). When no encoder or no override, falls back to a single param
+    group at the head LR — identical behaviour to the previous signature.
+    """
     name = (name or "adamw").lower()
+    encoder_params, head_params = _split_encoder_params(model)
+
+    if encoder_lr is not None and encoder_params:
+        groups = [
+            {"params": head_params, "lr": float(lr),
+             "weight_decay": float(weight_decay)},
+            {"params": encoder_params, "lr": float(encoder_lr),
+             "weight_decay": float(encoder_weight_decay if encoder_weight_decay is not None else weight_decay)},
+        ]
+    else:
+        groups = [
+            {"params": head_params + encoder_params, "lr": float(lr),
+             "weight_decay": float(weight_decay)},
+        ]
+
     if name == "adamw":
-        return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
+        return torch.optim.AdamW(groups)
     if name == "adam":
-        return torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
+        return torch.optim.Adam(groups)
     if name == "sgd":
-        return torch.optim.SGD(params, lr=lr, momentum=0.9, weight_decay=weight_decay)
+        return torch.optim.SGD(groups, momentum=0.9)
     raise ValueError(f"unknown optimizer: {name}")
 
 
@@ -278,12 +334,23 @@ def main() -> None:
 
     # ---- Optimizer + scheduler ---------------------------------------
     opt_cfg = training_cfg["optimizer"]
+    encoder_lr = opt_cfg.get("encoder_lr")
+    encoder_wd = opt_cfg.get("encoder_weight_decay")
     optimizer = build_optimizer(
         opt_cfg.get("name", "adamw"),
-        model.parameters(),
+        model,
         lr=float(opt_cfg["lr"]),
         weight_decay=float(opt_cfg.get("weight_decay", 0.0)),
+        encoder_lr=float(encoder_lr) if encoder_lr is not None else None,
+        encoder_weight_decay=float(encoder_wd) if encoder_wd is not None else None,
     )
+    if any("text_encoder" in n for n, _ in model.named_parameters() if _.requires_grad):
+        n_groups = len(optimizer.param_groups)
+        logger.info(
+            f"optimizer param groups: {n_groups}  "
+            f"(head_lr={optimizer.param_groups[0]['lr']}, "
+            f"encoder_lr={optimizer.param_groups[1]['lr'] if n_groups > 1 else 'shared'})"
+        )
 
     if args.max_steps is not None:
         steps_per_epoch = min(len(train_loader), args.max_steps)
