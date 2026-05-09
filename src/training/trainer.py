@@ -66,6 +66,11 @@ class Trainer:
             on A100/H100 with no loss-scaling required. Validation always
             runs in fp32 for stable metrics. MPS falls back to fp32 since
             bf16 autocast is not reliably supported there.
+        modality_dropout_p: probability per training step of zeroing one
+            randomly chosen modality's features (and length). 0.0 (default)
+            disables. Common values 0.1–0.2 for regularisation that improves
+            both clean accuracy and robustness under modality drop. Applied
+            only during training; validation/eval are unaffected.
     """
 
     def __init__(
@@ -86,6 +91,7 @@ class Trainer:
         early_stopping_patience: int = 5,
         log_every: int = 50,
         precision: str = "fp32",
+        modality_dropout_p: float = 0.0,
     ) -> None:
         self.model = model
         self.loss_fn = loss_fn
@@ -124,6 +130,12 @@ class Trainer:
                 "does not reliably support bf16 autocast; falling back to fp32"
             )
 
+        self.modality_dropout_p = float(modality_dropout_p)
+        if not 0.0 <= self.modality_dropout_p < 1.0:
+            raise ValueError(
+                f"modality_dropout_p must be in [0, 1); got {modality_dropout_p}"
+            )
+
         self.global_step = 0
         self.best_metric: float | None = None
         self.epochs_without_improvement = 0
@@ -149,6 +161,34 @@ class Trainer:
         }
         return {k: v for k, v in batch.items() if k in keys}
 
+    _MODALITY_NAMES = ("text", "audio", "visual")
+
+    def _apply_modality_dropout(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Per-step, with probability ``modality_dropout_p``, zero one random modality.
+
+        Modality is chosen uniformly from {text, audio, visual}. The
+        decision is taken once per step (per batch) so the batch is
+        consistent. Both the feature tensor and the per-sample length
+        are zeroed — keeping the mask-based attention pooling correct.
+
+        Validation/eval batches are untouched (this method is only
+        called from the training loop).
+        """
+        if self.modality_dropout_p <= 0.0:
+            return batch
+        # Single Bernoulli per batch; if it fires, pick one modality uniformly.
+        if torch.rand(()).item() >= self.modality_dropout_p:
+            return batch
+        idx = int(torch.randint(0, len(self._MODALITY_NAMES), ()).item())
+        modality = self._MODALITY_NAMES[idx]
+        out = dict(batch)
+        feat_key, len_key = modality, f"{modality}_length"
+        if feat_key in out and isinstance(out[feat_key], torch.Tensor):
+            out[feat_key] = torch.zeros_like(out[feat_key])
+        if len_key in out and isinstance(out[len_key], torch.Tensor):
+            out[len_key] = torch.zeros_like(out[len_key])
+        return out
+
     # ------------------------------------------------------------------
     # Train + validate
     # ------------------------------------------------------------------
@@ -160,6 +200,7 @@ class Trainer:
 
         for batch_idx, raw_batch in enumerate(self.train_loader):
             batch = self._to_device(raw_batch)
+            batch = self._apply_modality_dropout(batch)
             if self._autocast_enabled:
                 with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
                     output = self.model(**self._model_inputs(batch))

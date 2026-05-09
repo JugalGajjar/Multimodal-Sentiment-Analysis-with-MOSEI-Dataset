@@ -328,6 +328,7 @@ def main() -> None:
         early_stopping_patience=int(es_cfg.get("patience", 5)),
         log_every=int(training_cfg.get("log_every", 50)),
         precision=str(training_cfg.get("precision", "fp32")),
+        modality_dropout_p=float(training_cfg.get("modality_dropout_p", 0.0)),
     )
 
     try:

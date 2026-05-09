@@ -497,3 +497,117 @@ def test_trainer_bf16_falls_back_on_mps(tmp_path, monkeypatch):
         assert trainer._autocast_enabled is False
     finally:
         logger.finish()
+
+
+# ---------------------------------------------------------------------------
+# Modality dropout (improvement #2 — train-time regularisation)
+# ---------------------------------------------------------------------------
+
+
+def _modality_dropout_trainer(tmp_path, *, p: float):
+    """Build a one-batch Trainer with modality_dropout_p set to p."""
+    set_seed(0)
+    model = XMoFE(64, 64, 64, num_classes=3, task="classification",
+                  shared_dim=32, attention_heads=2, dropout=0.1)
+    loss_fn = XMoFELoss(task="classification", alpha=0.0, beta=0.0, gamma=0.0, delta=0.0)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+    class _Empty:
+        def __iter__(self): return iter([])
+        def __len__(self): return 0
+
+    evaluator = Evaluator(task="classification", num_classes=3, device="cpu")
+    logger = TrainingLogger(log_dir=tmp_path / "logs", run_name="t", config={}, use_wandb=False)
+    trainer = Trainer(
+        model=model, loss_fn=loss_fn, optimizer=optimizer,
+        evaluator=evaluator,
+        train_loader=_Empty(), val_loader=_Empty(),
+        device=torch.device("cpu"), logger=logger,
+        checkpoint_dir=tmp_path / "ckpt",
+        gradient_clip=1.0,
+        early_stopping_metric="accuracy", early_stopping_mode="max",
+        early_stopping_patience=10, log_every=1,
+        modality_dropout_p=p,
+    )
+    return trainer, logger
+
+
+def test_modality_dropout_default_is_zero(tmp_path):
+    trainer, logger = _modality_dropout_trainer(tmp_path, p=0.0)
+    try:
+        assert trainer.modality_dropout_p == 0.0
+    finally:
+        logger.finish()
+
+
+def test_modality_dropout_invalid_value_raises(tmp_path):
+    with pytest.raises(ValueError, match="modality_dropout_p"):
+        _modality_dropout_trainer(tmp_path, p=1.5)
+    with pytest.raises(ValueError, match="modality_dropout_p"):
+        _modality_dropout_trainer(tmp_path, p=-0.1)
+
+
+def test_modality_dropout_zero_returns_batch_unchanged(tmp_path):
+    """With p=0, _apply_modality_dropout must be a no-op."""
+    trainer, logger = _modality_dropout_trainer(tmp_path, p=0.0)
+    try:
+        batch = {
+            "text": torch.randn(4, 8, 64),
+            "audio": torch.randn(4, 8, 64),
+            "visual": torch.randn(4, 8, 64),
+            "text_length": torch.tensor([5, 8, 3, 7]),
+            "audio_length": torch.tensor([4, 8, 6, 5]),
+            "visual_length": torch.tensor([8, 7, 8, 6]),
+        }
+        result = trainer._apply_modality_dropout(batch)
+        for k in batch:
+            assert torch.equal(result[k], batch[k]), f"batch[{k}] modified despite p=0"
+    finally:
+        logger.finish()
+
+
+def test_modality_dropout_p1_always_zeros_one_modality(tmp_path):
+    """With p=1, every call must zero exactly one of {text, audio, visual}."""
+    trainer, logger = _modality_dropout_trainer(tmp_path, p=0.999)  # very near 1
+    try:
+        torch.manual_seed(42)
+        for _ in range(20):  # multiple trials to exercise the random modality choice
+            batch = {
+                "text": torch.randn(4, 8, 64),
+                "audio": torch.randn(4, 8, 64),
+                "visual": torch.randn(4, 8, 64),
+                "text_length": torch.tensor([5, 8, 3, 7]),
+                "audio_length": torch.tensor([4, 8, 6, 5]),
+                "visual_length": torch.tensor([8, 7, 8, 6]),
+            }
+            result = trainer._apply_modality_dropout(batch)
+            zeroed_modalities = []
+            for m in ("text", "audio", "visual"):
+                if torch.all(result[m] == 0) and torch.all(result[f"{m}_length"] == 0):
+                    zeroed_modalities.append(m)
+            # Exactly one modality should be zeroed (the dropout-target).
+            assert len(zeroed_modalities) == 1, (
+                f"expected exactly 1 modality zeroed, got {zeroed_modalities}"
+            )
+    finally:
+        logger.finish()
+
+
+def test_modality_dropout_validation_loader_unaffected(tmp_path):
+    """The dropout helper is only called from the train loop. Verify the
+    method itself respects mode by not being invoked on val batches; we
+    do this indirectly by checking `_apply_modality_dropout` isn't called
+    inside the evaluator."""
+    # The Trainer's _validate calls self.evaluator(...) which iterates
+    # val_loader directly — no modality dropout pathway. Quick structural
+    # check: the helper is only referenced inside _train_epoch.
+    import inspect
+    from src.training import trainer as t_mod
+    src = inspect.getsource(t_mod.Trainer)
+    train_idx = src.index("def _train_epoch")
+    validate_idx = src.index("def _validate")
+    # _apply_modality_dropout must appear within _train_epoch but not _validate.
+    train_block = src[train_idx:validate_idx]
+    validate_block = src[validate_idx:]
+    assert "_apply_modality_dropout" in train_block
+    assert "_apply_modality_dropout" not in validate_block
