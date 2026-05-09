@@ -1,0 +1,28 @@
+# X-MoFE model config with end-to-end text-encoder fine-tuning enabled.
+#
+# Same architecture as configs/models/xmofe.yaml, with text.finetune=true so
+# the model owns a trainable ModernBERT inside the graph. Train scripts will
+# additionally pass an encoder_lr (typically 1e-5) so the encoder's
+# parameters get a smaller LR than the downstream head (1e-4).
+
+shared_dim: 256
+attention_heads: 4
+dropout: 0.2
+ffn_multiplier: 4
+
+reliability:
+  use_quality_features: false
+  num_quality_features: 0
+  mlp_hidden: 256
+
+interaction:
+  use_trimodal: true
+  mlp_hidden: 256
+  condition_on_reliability: false   # default; flip to true to combine with X-MoFE+
+
+text:
+  finetune: true
+  encoder_name: answerdotai/ModernBERT-base
+  max_length: 128
+  trainable_layers: last_n          # full | last_n | none
+  last_n: 4

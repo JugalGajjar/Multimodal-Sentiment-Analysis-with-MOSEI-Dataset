@@ -1,0 +1,27 @@
+# X-MoFE fine-tune model config for MOSEI specifically.
+#
+# Identical to xmofe_finetune.yaml except text.max_length=512 — MOSEI uses
+# video-level transcripts (one per ~5-minute clip) that are much longer than
+# the utterance-level transcripts of MELD/CH-SIMS (where 128 tokens suffices).
+
+shared_dim: 256
+attention_heads: 4
+dropout: 0.2
+ffn_multiplier: 4
+
+reliability:
+  use_quality_features: false
+  num_quality_features: 0
+  mlp_hidden: 256
+
+interaction:
+  use_trimodal: true
+  mlp_hidden: 256
+  condition_on_reliability: false
+
+text:
+  finetune: true
+  encoder_name: answerdotai/ModernBERT-base
+  max_length: 512
+  trainable_layers: last_n
+  last_n: 4

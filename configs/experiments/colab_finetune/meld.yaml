@@ -1,0 +1,35 @@
+# MELD with end-to-end text encoder fine-tuning. See colab_finetune/ch_sims.yaml
+# for rationale on the smaller batch + encoder_lr.
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe_finetune.yaml
+loss_config: configs/training/loss.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 16
+  num_epochs: 25
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+    encoder_lr: 1.0e-5
+    encoder_weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld

@@ -1,0 +1,38 @@
+# CH-SIMS with end-to-end text encoder fine-tuning.
+#
+# Smaller batch (16 vs 64) because gradients now flow through ModernBERT
+# (~150M params). Encoder LR 1e-5 (vs head LR 1e-4) — standard fine-tune
+# practice. bf16 autocast for memory savings on A100.
+
+dataset: ch_sims
+manifest_dir: data/processed/ch_sims
+
+model_config: configs/models/xmofe_finetune.yaml
+loss_config: configs/training/loss.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 16
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+    encoder_lr: 1.0e-5
+    encoder_weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: ch_sims

@@ -1,0 +1,39 @@
+# MOSEI with end-to-end text encoder fine-tuning. Batch=4 to stay under the
+# A100 80 GB ceiling — MOSEI's long visual sequences (3600 frames) are the
+# bottleneck, and the encoder forward adds another ~5 GB on top.
+# Uses xmofe_finetune_mosei.yaml which sets max_length=512 (vs the default
+# 128) because MOSEI's video-level transcripts are much longer than the
+# utterance-level transcripts of MELD/CH-SIMS.
+
+dataset: mosei
+manifest_dir: data/processed/mosei
+
+model_config: configs/models/xmofe_finetune_mosei.yaml
+loss_config: configs/training/loss.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 4
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+    encoder_lr: 1.0e-5
+    encoder_weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: mosei
