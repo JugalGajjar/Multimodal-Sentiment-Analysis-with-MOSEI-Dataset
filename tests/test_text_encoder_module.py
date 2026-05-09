@@ -188,3 +188,201 @@ def test_module_can_be_moved_with_to(tiny_last_n):
     assert next(moved.encoder.parameters()).device.type == "cpu"
     features, _ = moved(["device-transfer test"])
     assert features.device.type == "cpu"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end integration: XMoFE.forward(transcripts=...) with fine-tunable
+# text encoder. Uses bert-tiny (128-dim) so the test runs quickly.
+# ---------------------------------------------------------------------------
+
+
+def test_xmofe_with_text_encoder_forward_and_backward():
+    """XMoFE with text_encoder_finetune=True consumes raw transcripts
+    instead of cached text features and produces predictions.
+    """
+    from src.models import XMoFE
+    import torch.nn.functional as F
+
+    torch.manual_seed(0)
+    model = XMoFE(
+        text_dim=128,    # ignored in fine-tune mode (overridden by encoder dim)
+        audio_dim=64, visual_dim=64,
+        num_classes=3, task="classification",
+        shared_dim=32, attention_heads=2, dropout=0.1,
+        text_encoder_finetune=True,
+        text_encoder_name=TINY_MODEL,
+        text_encoder_max_length=16,
+        text_encoder_trainable_layers="last_n",
+        text_encoder_last_n=1,
+    )
+    # The encoder should be present and the model should have absorbed the
+    # encoder's hidden_size rather than the text_dim we passed.
+    assert model.text_encoder is not None
+    assert model.proj_text.proj.in_features == model.text_encoder.feature_dim
+
+    transcripts = ["positive review one", "negative review two"]
+    batch = {
+        "audio": torch.randn(2, 8, 64),
+        "visual": torch.randn(2, 8, 64),
+        "audio_length": torch.tensor([6, 5]),
+        "visual_length": torch.tensor([7, 8]),
+    }
+    out = model(transcripts=transcripts, **batch)
+    assert out.prediction.shape == (2, 3)
+    labels = torch.tensor([0, 2])
+    F.cross_entropy(out.prediction, labels).backward()
+
+    # The encoder's last layer must have received gradients through the loss.
+    layer_list = model.text_encoder._find_layer_list()
+    assert layer_list is not None
+    last_layer_grads = [
+        p.grad is not None and p.grad.abs().sum() > 0
+        for p in layer_list[-1].parameters()
+    ]
+    assert all(last_layer_grads), "encoder's last layer should receive gradients"
+
+
+def test_xmofe_finetune_mode_falls_back_to_cached_path_without_transcripts():
+    """If no transcripts are passed, the fine-tune model should still be
+    able to consume cached features. This matters at eval time when we
+    might pass only cached features for speed."""
+    from src.models import XMoFE
+
+    torch.manual_seed(0)
+    model = XMoFE(
+        text_dim=128, audio_dim=64, visual_dim=64,
+        num_classes=1, task="regression",
+        shared_dim=32, attention_heads=2, dropout=0.1,
+        text_encoder_finetune=True,
+        text_encoder_name=TINY_MODEL,
+        text_encoder_max_length=16,
+        text_encoder_trainable_layers="none",
+        text_encoder_last_n=1,
+    )
+    batch = {
+        "text": torch.randn(2, 8, 128),
+        "audio": torch.randn(2, 8, 64),
+        "visual": torch.randn(2, 8, 64),
+        "text_length": torch.tensor([5, 7]),
+        "audio_length": torch.tensor([6, 5]),
+        "visual_length": torch.tensor([7, 8]),
+    }
+    out = model(**batch)
+    # Regression with num_classes=1 squeezes the trailing dim.
+    assert out.prediction.shape == (2,)
+
+
+def test_evaluator_forwards_transcripts_to_model():
+    """Phase-1 regression guard: Evaluator must include `transcripts` in the
+    keys it forwards to ``model(**inputs)`` so fine-tuned models actually
+    use the in-graph encoder at val/test time. Without this, fine-tuned
+    models would silently fall back to stale cached features."""
+    import inspect
+    from src.training import Evaluator
+    src = inspect.getsource(Evaluator.__call__)
+    assert '"transcripts"' in src, (
+        "Evaluator.__call__ must whitelist `transcripts` in the inputs filter"
+    )
+
+
+def test_apply_missing_clears_transcripts_when_text_missing():
+    """When the missing-modality protocol drops text AND the batch carries
+    raw transcripts (fine-tune path), the transcripts must be emptied so
+    the encoder doesn't re-introduce text via its forward pass."""
+    from src.robustness import apply_missing
+
+    batch = {
+        "text": torch.zeros(2, 4, 8),
+        "audio": torch.zeros(2, 4, 8),
+        "visual": torch.zeros(2, 4, 8),
+        "text_length": torch.tensor([4, 4]),
+        "audio_length": torch.tensor([4, 4]),
+        "visual_length": torch.tensor([4, 4]),
+        "transcripts": ["this is the original text", "another original transcript"],
+    }
+    out = apply_missing(batch, ("text",))
+    assert out["transcripts"] == ["", ""], (
+        "transcripts must be emptied when text is dropped"
+    )
+    assert (out["text_length"] == 0).all()
+    # Other modalities untouched.
+    assert (out["audio_length"] == 4).all()
+    assert (out["visual_length"] == 4).all()
+
+
+def test_apply_missing_leaves_transcripts_alone_when_only_audio_or_visual_dropped():
+    """Dropping audio or visual must not touch transcripts."""
+    from src.robustness import apply_missing
+
+    batch = {
+        "text": torch.zeros(2, 4, 8),
+        "audio": torch.zeros(2, 4, 8),
+        "visual": torch.zeros(2, 4, 8),
+        "text_length": torch.tensor([4, 4]),
+        "audio_length": torch.tensor([4, 4]),
+        "visual_length": torch.tensor([4, 4]),
+        "transcripts": ["alpha", "beta"],
+    }
+    out_a = apply_missing(batch, ("audio",))
+    out_v = apply_missing(batch, ("visual",))
+    assert out_a["transcripts"] == ["alpha", "beta"]
+    assert out_v["transcripts"] == ["alpha", "beta"]
+
+
+def test_apply_missing_no_transcripts_field_is_no_op():
+    """Backwards compat: if the batch does not carry transcripts (cached
+    feature path / un-patched manifest), apply_missing must not crash."""
+    from src.robustness import apply_missing
+
+    batch = {
+        "text": torch.zeros(2, 4, 8),
+        "audio": torch.zeros(2, 4, 8),
+        "visual": torch.zeros(2, 4, 8),
+        "text_length": torch.tensor([4, 4]),
+        "audio_length": torch.tensor([4, 4]),
+        "visual_length": torch.tensor([4, 4]),
+    }
+    out = apply_missing(batch, ("text",))
+    assert "transcripts" not in out
+
+
+def test_split_encoder_params_partitions_correctly():
+    """The optimizer-grouping helper in train_xmofe.py must put encoder
+    params in one group and head params in another."""
+    import importlib.util
+    from src.models import XMoFE
+
+    spec = importlib.util.spec_from_file_location(
+        "train_xmofe", "scripts/train/train_xmofe.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # Model with fine-tune on
+    m_ft = XMoFE(
+        text_dim=128, audio_dim=64, visual_dim=64,
+        num_classes=1, task="regression",
+        shared_dim=32, attention_heads=2, dropout=0.1,
+        text_encoder_finetune=True,
+        text_encoder_name=TINY_MODEL,
+        text_encoder_max_length=16,
+        text_encoder_trainable_layers="last_n",
+        text_encoder_last_n=1,
+    )
+    enc_params, head_params = mod._split_encoder_params(m_ft)
+    assert len(enc_params) > 0
+    assert len(head_params) > 0
+    enc_ids = {id(p) for p in enc_params}
+    head_ids = {id(p) for p in head_params}
+    assert enc_ids.isdisjoint(head_ids), "param groups must be disjoint"
+
+    # Model without fine-tune: encoder group should be empty
+    m_frozen = XMoFE(
+        text_dim=128, audio_dim=64, visual_dim=64,
+        num_classes=1, task="regression",
+        shared_dim=32, attention_heads=2, dropout=0.1,
+        text_encoder_finetune=False,
+    )
+    enc_params2, head_params2 = mod._split_encoder_params(m_frozen)
+    assert enc_params2 == []
+    assert len(head_params2) > 0

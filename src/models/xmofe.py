@@ -40,6 +40,16 @@ from src.models.projections import ModalityProjection
 from src.models.reliability import ReliabilityEstimator
 
 
+def _lazy_text_encoder_module():
+    """Import ``TextEncoderModule`` only when fine-tuning is requested.
+
+    Keeps the frozen-feature default path free of any ``transformers``
+    runtime dependency in the model graph.
+    """
+    from src.encoders.text_encoder_module import TextEncoderModule
+    return TextEncoderModule
+
+
 PAIRWISE_INTERACTIONS = ("text_audio", "text_visual", "audio_visual")
 TRIMODAL_INTERACTION = "trimodal"
 
@@ -87,6 +97,11 @@ class XMoFE(nn.Module):
         reliability_mlp_hidden: int = 256,
         interaction_mlp_hidden: int = 256,
         condition_interaction_on_reliability: bool = False,
+        text_encoder_finetune: bool = False,
+        text_encoder_name: str = "answerdotai/ModernBERT-base",
+        text_encoder_max_length: int = 128,
+        text_encoder_trainable_layers: str = "last_n",
+        text_encoder_last_n: int = 4,
     ) -> None:
         super().__init__()
 
@@ -95,7 +110,27 @@ class XMoFE(nn.Module):
         self.use_reliability_gate = use_reliability_gate
         self.use_interaction_block = use_interaction_block
         self.condition_interaction_on_reliability = condition_interaction_on_reliability
+        self.text_encoder_finetune = text_encoder_finetune
         self.task = task
+
+        # Optional in-graph text encoder. When ``text_encoder_finetune`` is
+        # True, the model takes raw transcripts at forward-time and runs
+        # them through this encoder; otherwise it expects cached text
+        # features in the ``text`` argument as before. Loaded lazily so the
+        # default frozen-feature path stays free of HF runtime overhead.
+        if text_encoder_finetune:
+            TextEncoderModule = _lazy_text_encoder_module()
+            self.text_encoder = TextEncoderModule(
+                model_name=text_encoder_name,
+                max_length=text_encoder_max_length,
+                trainable_layers=text_encoder_trainable_layers,
+                last_n=text_encoder_last_n,
+            )
+            # Override the input text_dim so projections match the encoder's
+            # actual hidden size (e.g. ModernBERT-base = 768).
+            text_dim = self.text_encoder.feature_dim
+        else:
+            self.text_encoder = None
 
         # Projections
         self.proj_text = ModalityProjection(text_dim, shared_dim, dropout)
@@ -167,6 +202,7 @@ class XMoFE(nn.Module):
         """
         rel = config.get("reliability") or {}
         inter = config.get("interaction") or {}
+        text_cfg = config.get("text") or {}
         return cls(
             text_dim=text_dim,
             audio_dim=audio_dim,
@@ -184,19 +220,38 @@ class XMoFE(nn.Module):
             reliability_mlp_hidden=rel.get("mlp_hidden", 256),
             interaction_mlp_hidden=inter.get("mlp_hidden", 256),
             condition_interaction_on_reliability=inter.get("condition_on_reliability", False),
+            text_encoder_finetune=text_cfg.get("finetune", False),
+            text_encoder_name=text_cfg.get("encoder_name", "answerdotai/ModernBERT-base"),
+            text_encoder_max_length=text_cfg.get("max_length", 128),
+            text_encoder_trainable_layers=text_cfg.get("trainable_layers", "last_n"),
+            text_encoder_last_n=text_cfg.get("last_n", 4),
         )
 
     def forward(
         self,
-        text: torch.Tensor,
-        audio: torch.Tensor,
-        visual: torch.Tensor,
-        text_length: torch.Tensor,
-        audio_length: torch.Tensor,
-        visual_length: torch.Tensor,
+        text: torch.Tensor | None = None,
+        audio: torch.Tensor | None = None,
+        visual: torch.Tensor | None = None,
+        text_length: torch.Tensor | None = None,
+        audio_length: torch.Tensor | None = None,
+        visual_length: torch.Tensor | None = None,
         quality: torch.Tensor | None = None,
+        transcripts: list[str] | None = None,
         return_intermediates: bool = True,
     ) -> XMoFEOutput:
+        # When the model owns a trainable text encoder and transcripts are
+        # provided, encode them in-graph and override the cached text tensor
+        # + length so all downstream stages see the freshly-encoded features.
+        # Backward then flows through the encoder. When no transcripts are
+        # given, fall back to the cached path (`text`, `text_length`).
+        if self.text_encoder is not None and transcripts is not None:
+            text, text_length = self.text_encoder(transcripts)
+        if text is None or audio is None or visual is None:
+            raise ValueError(
+                "XMoFE.forward needs all three modality tensors. Either pass "
+                "cached features or pass transcripts (with text_encoder enabled)."
+            )
+
         # 1. Project to shared dim
         Z_t = self.proj_text(text)
         Z_a = self.proj_audio(audio)
