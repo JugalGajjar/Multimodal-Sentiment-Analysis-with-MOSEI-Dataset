@@ -1,22 +1,35 @@
 """Prepare CMU-MOSEI metadata and splits.
 
-Reads the timestamped-words and labels CSD files from data/raw/mosei/, walks
-every aligned segment, joins it with the official train/valid/test folds, and
+Reads the timestamped-words and labels CSD files from data/raw/CMU-MOSEI/,
+joins each labelled utterance with the official train/valid/test folds, and
 writes data/interim/mosei/{metadata.jsonl,splits.json}.
 
-The CSD files give us:
-  * segment ids of the form "<video_id>[<segment_idx>]"
-  * per-segment word lists with start/end timestamps
-  * per-segment 7-dim label vectors:
-      [sentiment, happy, sad, anger, surprise, disgust, fear]
+Granularity (``--granularity``):
+  * **utterance** (default, ~22,856 samples) — one Sample per labelled
+    utterance row. Sample IDs are ``"<video_id>[<utt_idx>]"`` and each
+    sample carries the utterance's ``start_time``/``end_time`` so the
+    audio/visual feature extractors can slice the per-video CSD sequences.
+    This matches the field-standard CMU-MOSEI utterance protocol used by
+    Self-MM/MISA/MMIM/MAG-BERT/ALMT (16,326 / 1,871 / 4,659 splits).
+  * **video** (~3,225 samples, legacy) — one Sample per video, using only
+    the *first* utterance's label/features. Kept for backward compatibility
+    with the original pre-fix protocol. **Not recommended for new runs.**
 
-Raw mp4 video paths are populated only when ``video.root`` is set in the
-config and a matching <video_id>.<ext> file exists on disk.
+The CSDs we read give us:
+  * keys = ``<video_id>``
+  * ``labels[vid]["features"]`` shape ``(N_utt, 7)`` —
+    ``[sentiment, happy, sad, anger, surprise, disgust, fear]``
+  * ``labels[vid]["intervals"]`` shape ``(N_utt, 2)`` — start/end seconds
+  * ``language[vid]["features"]``/``intervals`` — per-word tokens + timestamps
+
+Per-utterance transcripts are reconstructed by collecting words whose
+midpoint falls within the utterance's ``[start, end]`` interval.
 
 Examples
 --------
-    python scripts/data/prepare_mosei.py
-    python scripts/data/prepare_mosei.py --raw-dir data/raw/mosei --limit 50
+    python scripts/data/prepare_mosei.py                              # utterance (default)
+    python scripts/data/prepare_mosei.py --granularity video          # legacy
+    python scripts/data/prepare_mosei.py --limit 50                   # debugging
 """
 
 from __future__ import annotations
@@ -74,10 +87,12 @@ def split_for_video(
 
 
 def transcript_from_words(words_features) -> str:
-    """Decode the timestamped-words feature array into a plain string."""
+    """Decode a 1-D iterable of word entries into a plain string."""
     parts: list[str] = []
     for word in words_features:
-        token = word[0]
+        # Word entry can be either a 1-D row from the words CSD (shape (1,))
+        # or a bare string after we sliced by interval.
+        token = word[0] if hasattr(word, "__len__") and len(word) > 0 and not isinstance(word, (bytes, str)) else word
         if isinstance(token, bytes):
             token = token.decode("utf-8", errors="replace")
         token = str(token).strip()
@@ -85,6 +100,28 @@ def transcript_from_words(words_features) -> str:
             continue
         parts.append(token)
     return " ".join(parts)
+
+
+def slice_words_by_interval(
+    word_features,
+    word_intervals,
+    start_time: float,
+    end_time: float,
+) -> str:
+    """Return the transcript of all words whose midpoint lies within ``[start, end]``.
+
+    The CMU-MOSEI words CSD stores per-word start/end timestamps; this picks
+    the subset that belongs to a given utterance interval.
+    """
+    if word_features is None or word_intervals is None or len(word_intervals) == 0:
+        return ""
+    import numpy as np
+    word_intervals = np.asarray(word_intervals, dtype=float)
+    midpoints = word_intervals.mean(axis=1)
+    mask = (midpoints >= start_time) & (midpoints <= end_time)
+    selected = word_features[mask] if hasattr(word_features, "__getitem__") else \
+               [w for w, m in zip(word_features, mask) if m]
+    return transcript_from_words(selected)
 
 
 def build_sample(
@@ -158,6 +195,12 @@ def main() -> None:
         default=None,
         help="Process at most N segments (debugging).",
     )
+    parser.add_argument(
+        "--granularity",
+        choices=("utterance", "video"),
+        default="utterance",
+        help="utterance (default, field-standard ~22k samples) or video (legacy ~3.2k).",
+    )
     args = parser.parse_args()
 
     cfg = load_config()
@@ -207,50 +250,87 @@ def main() -> None:
 
     samples: list[Sample] = []
     splits: dict[str, list[str]] = {"train": [], "val": [], "test": []}
-    skipped = unfolded = 0
+    skipped = unfolded = empty_features = 0
 
-    segment_ids = list(dataset["labels"].keys())
-    log.info("found %d segments in labels CSD", len(segment_ids))
-    if args.limit is not None:
-        segment_ids = segment_ids[: args.limit]
+    video_ids = list(dataset["labels"].keys())
+    log.info(
+        "found %d videos in labels CSD; granularity=%s", len(video_ids), args.granularity,
+    )
 
-    for segment_id in segment_ids:
-        video_id = segment_id.split("[")[0]
+    # Counter so --limit applies at the SAMPLE level (1 sample per utterance
+    # in utterance mode, 1 per video in video mode). This keeps debugging
+    # runs cheap regardless of granularity.
+    n_samples_emitted = 0
+
+    for video_id in video_ids:
         split = split_for_video(video_id, train_fold, valid_fold, test_fold)
         if split is None:
             unfolded += 1
             continue
 
         try:
-            label_vector = dataset["labels"][segment_id]["features"][0]
+            label_features = dataset["labels"][video_id]["features"]   # (N_utt, 7)
+            label_intervals = dataset["labels"][video_id]["intervals"] # (N_utt, 2)
         except (KeyError, IndexError):
             skipped += 1
             continue
+        if len(label_features) == 0:
+            empty_features += 1
+            continue
 
+        # Words for this video (whole-video word stream)
         try:
-            words_entry = dataset["language"][segment_id]
-            transcript = transcript_from_words(words_entry["features"])
-            intervals = words_entry["intervals"]
+            words_entry = dataset["language"][video_id]
+            word_feats = words_entry["features"]
+            word_intervals = words_entry["intervals"]
         except KeyError:
-            transcript = ""
-            intervals = None
+            word_feats = None
+            word_intervals = None
 
         if video_id in video_lookup:
             video_path_rel = str(video_lookup[video_id].relative_to(REPO_ROOT))
         else:
             video_path_rel = None
 
-        sample = build_sample(
-            segment_id=segment_id,
-            video_id=video_id,
-            split=split,
-            transcript=transcript,
-            label_vector=label_vector,
-            intervals=intervals,
-            video_path_rel=video_path_rel,
-        )
-        samples.append(sample)
-        splits[split].append(segment_id)
+        # Iterate utterances within this video (in utterance mode), or just
+        # the first one (legacy video mode).
+        utt_indices = range(len(label_features)) if args.granularity == "utterance" else range(1)
+        for utt_idx in utt_indices:
+            label_vector = label_features[utt_idx]
+            utt_start, utt_end = float(label_intervals[utt_idx][0]), float(label_intervals[utt_idx][1])
+
+            if args.granularity == "utterance":
+                sample_id = f"{video_id}[{utt_idx}]"
+                # Per-utterance transcript: slice the per-video word stream
+                # by the utterance interval (word midpoint within [start, end]).
+                transcript = slice_words_by_interval(
+                    word_feats, word_intervals, utt_start, utt_end,
+                )
+                intervals_for_sample = [(utt_start, utt_end)]
+            else:
+                # video mode: keep sample_id = video_id (legacy behaviour)
+                sample_id = video_id
+                transcript = (
+                    transcript_from_words(word_feats) if word_feats is not None else ""
+                )
+                intervals_for_sample = word_intervals
+
+            sample = build_sample(
+                segment_id=sample_id,
+                video_id=video_id,
+                split=split,
+                transcript=transcript,
+                label_vector=label_vector,
+                intervals=intervals_for_sample,
+                video_path_rel=video_path_rel,
+            )
+            samples.append(sample)
+            splits[split].append(sample_id)
+            n_samples_emitted += 1
+            if args.limit is not None and n_samples_emitted >= args.limit:
+                break
+        if args.limit is not None and n_samples_emitted >= args.limit:
+            break
 
     written = write_jsonl(metadata_file, samples)
     counts = write_splits(splits_file, splits)
@@ -258,9 +338,11 @@ def main() -> None:
     log.info("wrote %d samples to %s", written, metadata_file)
     log.info("split counts: %s", counts)
     if skipped:
-        log.warning("skipped %d segments due to missing label features", skipped)
+        log.warning("skipped %d videos due to missing label features", skipped)
+    if empty_features:
+        log.warning("skipped %d videos with empty label feature arrays", empty_features)
     if unfolded:
-        log.warning("skipped %d segments not present in any standard fold", unfolded)
+        log.warning("skipped %d videos not present in any standard fold", unfolded)
 
 
 if __name__ == "__main__":
