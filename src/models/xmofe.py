@@ -97,6 +97,7 @@ class XMoFE(nn.Module):
         reliability_mlp_hidden: int = 256,
         interaction_mlp_hidden: int = 256,
         condition_interaction_on_reliability: bool = False,
+        interaction_gating: str = "softmax",
         text_encoder_finetune: bool = False,
         text_encoder_name: str = "answerdotai/ModernBERT-base",
         text_encoder_max_length: int = 128,
@@ -157,6 +158,7 @@ class XMoFE(nn.Module):
                 mlp_hidden=interaction_mlp_hidden,
                 dropout=dropout,
                 condition_on_reliability=condition_interaction_on_reliability,
+                gating=interaction_gating,
             )
             self.interaction_names = (
                 (*PAIRWISE_INTERACTIONS, TRIMODAL_INTERACTION) if use_trimodal else PAIRWISE_INTERACTIONS
@@ -220,6 +222,7 @@ class XMoFE(nn.Module):
             reliability_mlp_hidden=rel.get("mlp_hidden", 256),
             interaction_mlp_hidden=inter.get("mlp_hidden", 256),
             condition_interaction_on_reliability=inter.get("condition_on_reliability", False),
+            interaction_gating=inter.get("gating", "softmax"),
             text_encoder_finetune=text_cfg.get("finetune", False),
             text_encoder_name=text_cfg.get("encoder_name", "answerdotai/ModernBERT-base"),
             text_encoder_max_length=text_cfg.get("max_length", 128),

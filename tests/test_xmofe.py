@@ -412,6 +412,91 @@ def test_xmofe_default_interaction_estimator_unchanged():
     assert first_linear.in_features == 32 * 4   # shared_dim * num_interactions, no +3
 
 
+# ---------------------------------------------------------------------------
+# Interaction gating mode (Lever-3: sigmoid alternative to softmax)
+# ---------------------------------------------------------------------------
+
+
+def test_interaction_estimator_invalid_gating_raises():
+    from src.models.interaction import InteractionEstimator
+    with pytest.raises(ValueError, match="gating"):
+        InteractionEstimator(shared_dim=8, num_interactions=4, gating="bogus")
+
+
+def test_interaction_estimator_softmax_output_sums_to_one():
+    """Default softmax gating: every row of lambda sums to 1."""
+    from src.models.interaction import InteractionEstimator
+    est = InteractionEstimator(shared_dim=8, num_interactions=4, gating="softmax")
+    vecs = [torch.randn(3, 8) for _ in range(4)]
+    lam = est(*vecs)
+    assert torch.allclose(lam.sum(dim=-1), torch.ones(3), atol=1e-5)
+    assert ((lam >= 0) & (lam <= 1)).all()
+
+
+def test_interaction_estimator_sigmoid_output_is_independent():
+    """Sigmoid gating: each lambda in [0, 1] independently; row sums unconstrained."""
+    from src.models.interaction import InteractionEstimator
+    torch.manual_seed(0)
+    est = InteractionEstimator(shared_dim=8, num_interactions=4, gating="sigmoid")
+    vecs = [torch.randn(3, 8) for _ in range(4)]
+    lam = est(*vecs)
+    assert ((lam >= 0) & (lam <= 1)).all()
+    # Sigmoid lambdas should not all sum exactly to 1 (statistically near zero).
+    assert not torch.allclose(lam.sum(dim=-1), torch.ones(3), atol=1e-3)
+
+
+def test_interaction_estimator_sigmoid_gradients_flow():
+    from src.models.interaction import InteractionEstimator
+    torch.manual_seed(0)
+    est = InteractionEstimator(shared_dim=8, num_interactions=4, gating="sigmoid")
+    vecs = [torch.randn(2, 8) for _ in range(4)]
+    lam = est(*vecs)
+    lam.sum().backward()
+    final_linear = est.mlp[-1]
+    assert final_linear.weight.grad is not None and final_linear.weight.grad.abs().sum() > 0
+
+
+def test_xmofe_with_sigmoid_interaction_gating_forward_backward():
+    """End-to-end XMoFE with sigmoid interactions: forward + backward run cleanly,
+    interactions are in [0, 1] but do NOT sum to 1."""
+    torch.manual_seed(0)
+    model = XMoFE(
+        text_dim=64, audio_dim=64, visual_dim=64,
+        num_classes=3, task="classification",
+        shared_dim=32, attention_heads=2, dropout=0.1,
+        interaction_gating="sigmoid",
+    )
+    batch = {
+        "text": torch.randn(4, 8, 64),
+        "audio": torch.randn(4, 8, 64),
+        "visual": torch.randn(4, 8, 64),
+        "text_length": torch.tensor([5, 8, 3, 7]),
+        "audio_length": torch.tensor([4, 8, 6, 5]),
+        "visual_length": torch.tensor([8, 7, 8, 6]),
+    }
+    out = model(**batch)
+    assert out.prediction.shape == (4, 3)
+    assert ((out.interactions >= 0) & (out.interactions <= 1)).all()
+    F.cross_entropy(out.prediction, torch.tensor([0, 2, 1, 0])).backward()
+
+
+def test_xmofe_from_config_reads_gating_flag(config):
+    """interaction.gating: sigmoid in YAML propagates to the model."""
+    cfg = dict(config)
+    cfg["interaction"] = dict(cfg.get("interaction") or {})
+    cfg["interaction"]["gating"] = "sigmoid"
+    model = XMoFE.from_config(cfg, text_dim=128, audio_dim=128, visual_dim=128,
+                              task="regression", num_classes=1)
+    assert model.interaction_estimator.gating == "sigmoid"
+
+    cfg2 = dict(config)
+    cfg2["interaction"] = dict(cfg2.get("interaction") or {})
+    cfg2["interaction"].pop("gating", None)
+    model2 = XMoFE.from_config(cfg2, text_dim=128, audio_dim=128, visual_dim=128,
+                               task="regression", num_classes=1)
+    assert model2.interaction_estimator.gating == "softmax"
+
+
 def test_xmofe_from_config_reads_condition_on_reliability_flag(config):
     """Config-level `interaction.condition_on_reliability: true` propagates."""
     cfg = dict(config)
