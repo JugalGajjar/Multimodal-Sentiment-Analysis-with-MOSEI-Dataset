@@ -173,8 +173,20 @@ def encode_split_openface(
 
     for start in tqdm(range(0, len(samples), batch_size), desc="encode", unit="batch"):
         batch = samples[start : start + batch_size]
+        # When start/end_time are populated (utterance-level samples), pass
+        # them as intervals so the per-video OpenFace2 sequence is sliced
+        # to the utterance boundary. Falls through to per-video on absence.
         video_ids = [s.extra.get("video_id") or s.sample_id.split("[")[0] for s in batch]
-        feats, lens = reader.encode(video_ids)
+        intervals = [
+            (s.start_time, s.end_time)
+            if (s.start_time is not None and s.end_time is not None)
+            else None
+            for s in batch
+        ]
+        if any(iv is not None for iv in intervals):
+            feats, lens = reader.encode(video_ids, intervals=intervals)
+        else:
+            feats, lens = reader.encode(video_ids)
         chunks.append(feats.to(cache_dtype))
         all_lengths.append(lens)
 

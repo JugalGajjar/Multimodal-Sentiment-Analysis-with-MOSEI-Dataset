@@ -166,9 +166,22 @@ def encode_split_covarep(
 
     for start in tqdm(range(0, len(samples), batch_size), desc="encode", unit="batch"):
         batch = samples[start : start + batch_size]
-        # MOSEI samples carry video_id in extra (set by prepare_mosei.py)
+        # MOSEI samples carry video_id in extra (set by prepare_mosei.py).
+        # When start/end_time are populated (utterance-level samples), pass
+        # them as intervals so the per-video COVAREP sequence is sliced
+        # down to the utterance boundary. Falls through to per-video
+        # sequences when intervals are absent (legacy video-level path).
         video_ids = [s.extra.get("video_id") or s.sample_id.split("[")[0] for s in batch]
-        feats, lens = reader.encode(video_ids)
+        intervals = [
+            (s.start_time, s.end_time)
+            if (s.start_time is not None and s.end_time is not None)
+            else None
+            for s in batch
+        ]
+        if any(iv is not None for iv in intervals):
+            feats, lens = reader.encode(video_ids, intervals=intervals)
+        else:
+            feats, lens = reader.encode(video_ids)
         chunks.append(feats.to(cache_dtype))
         all_lengths.append(lens)
 
