@@ -1,0 +1,32 @@
+# X-MoFE with sigmoid interaction gating (Lever-3 fix for trimodal collapse).
+#
+# Identical architecture to xmofe.yaml except the interaction estimator
+# applies an element-wise sigmoid instead of softmax over the interaction
+# logits. With softmax, training drove ~99.95% of the mass onto the
+# trimodal pathway across all 3 datasets — effectively bypassing the
+# pairwise interactions. Sigmoid removes the zero-sum constraint and
+# lets the model use multiple pathways at full strength simultaneously.
+#
+# Use with: `--variant xmofe` (or any other variant — sigmoid only
+# affects models that own an InteractionEstimator).
+
+name: xmofe_sigmoid
+shared_dim: 256
+attention_heads: 4
+dropout: 0.2
+ffn_multiplier: 4
+
+reliability:
+  mlp_hidden: 256
+  use_quality_features: false
+  num_quality_features: 0
+
+interaction:
+  use_trimodal: true
+  mlp_hidden: 256
+  gating: sigmoid                    # Lever-3 fix; softmax → sigmoid
+  # condition_on_reliability: false  # can combine with the X-MoFE+ flag later
+
+prediction:
+  task: regression
+  num_classes: 1

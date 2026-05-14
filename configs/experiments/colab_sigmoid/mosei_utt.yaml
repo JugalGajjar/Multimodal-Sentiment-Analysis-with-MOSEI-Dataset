@@ -1,0 +1,42 @@
+# MOSEI utterance-level (Lever-1) + sigmoid interaction gating (Lever-3).
+#
+# Uses the same data path as the existing colab/mosei.yaml — re-running
+# prepare_mosei.py + the feature extractors will populate
+# data/processed/mosei/ with utterance-level manifests (~22.8k samples)
+# automatically, since both prep and extraction now emit/consume the
+# new granularity by default.
+#
+# Batch size dropped to 8 because the utterance-level test split (4,662
+# samples) and audio/visual CSD slicing produce shorter sequences than
+# the video-level setup; batch can probably go higher empirically.
+
+dataset: mosei
+manifest_dir: data/processed/mosei
+
+model_config: configs/models/xmofe_sigmoid.yaml
+loss_config: configs/training/loss.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 8
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: mosei
