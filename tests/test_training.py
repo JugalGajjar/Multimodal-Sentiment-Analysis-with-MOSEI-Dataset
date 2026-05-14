@@ -593,6 +593,154 @@ def test_modality_dropout_p1_always_zeros_one_modality(tmp_path):
         logger.finish()
 
 
+# ---------------------------------------------------------------------------
+# Dialogue context (Lever 2 — MELD dialogue modeling)
+# ---------------------------------------------------------------------------
+
+
+def _build_synthetic_dialogue_manifest(tmp_path, *, with_dialogue_fields: bool = True):
+    """Create a small synthetic manifest matching the patched format,
+    with two dialogues of 3 + 2 utterances. Avoids needing real cached
+    features by writing tiny per-modality cache files alongside.
+    """
+    import json as _json
+    from src.data.features import write_feature_cache
+
+    n = 5
+    sample_ids = [f"dia0_utt{i}" for i in range(3)] + [f"dia1_utt{i}" for i in range(2)]
+    transcripts = [
+        "hi there",                      # dia0 utt0 Alice
+        "hello back",                    # dia0 utt1 Bob
+        "how is your day",               # dia0 utt2 Alice
+        "totally agree",                 # dia1 utt0 Carol
+        "me too",                        # dia1 utt1 Dave
+    ]
+    speakers = ["Alice", "Bob", "Alice", "Carol", "Dave"]
+    dialogues = ["0", "0", "0", "1", "1"]
+    utt_idxs  = [0, 1, 2, 0, 1]
+    labels = torch.tensor([0, 1, 2, 0, 1], dtype=torch.long)
+
+    feature_dim = 4
+    L = 3
+    feats = torch.zeros(n, L, feature_dim, dtype=torch.float32)
+    lengths = torch.full((n,), L, dtype=torch.int32)
+
+    base = tmp_path / "ch_sims"   # use a real dataset name so collate is happy
+    (base / "text_features").mkdir(parents=True, exist_ok=True)
+    (base / "audio_features").mkdir(parents=True, exist_ok=True)
+    (base / "visual_features").mkdir(parents=True, exist_ok=True)
+    for mod in ("text", "audio", "visual"):
+        write_feature_cache(
+            base / f"{mod}_features" / "test.pt",
+            sample_ids, feats, lengths,
+            {
+                "dataset": "ch_sims", "split": "test",
+                "modality": mod, "encoder_name": "stub", "encoder_source": "stub",
+                "feature_dim": feature_dim, "max_length": L,
+                "num_samples": len(sample_ids),
+            },
+        )
+
+    manifest = {
+        "dataset": "ch_sims",
+        "split": "test",
+        "task": "classification",
+        "sample_ids": sample_ids,
+        "primary_labels": labels,
+        "labels": [{} for _ in range(n)],
+        "modalities": {
+            mod: {
+                "cache_path": f"{mod}_features/test.pt",
+                "feature_dim": feature_dim,
+                "max_length": L,
+            } for mod in ("text", "audio", "visual")
+        },
+        "transcripts": transcripts,
+    }
+    if with_dialogue_fields:
+        manifest["speaker_ids"] = speakers
+        manifest["dialogue_ids"] = dialogues
+        manifest["utterance_indices"] = utt_idxs
+    out_path = base / "test.pt"
+    torch.save(manifest, out_path)
+    return out_path
+
+
+def test_dataset_context_window_zero_returns_raw_transcript(tmp_path):
+    """Default behaviour: no context prepended."""
+    from src.data import XMoFEDataset
+    p = _build_synthetic_dialogue_manifest(tmp_path)
+    ds = XMoFEDataset(p, context_window=0)
+    sample = ds[2]   # dia0_utt2 (3rd utterance)
+    assert sample["transcript"] == "how is your day"
+
+
+def test_dataset_context_window_includes_prior_utterances(tmp_path):
+    """With window=2, dia0_utt2 should see Alice + Bob's prior turns."""
+    from src.data import XMoFEDataset
+    p = _build_synthetic_dialogue_manifest(tmp_path)
+    ds = XMoFEDataset(p, context_window=2)
+    sample = ds[2]   # dia0_utt2 Alice "how is your day"
+    text = sample["transcript"]
+    assert "Alice: hi there" in text
+    assert "Bob: hello back" in text
+    # Current utterance also tagged with speaker.
+    assert text.endswith("Alice: how is your day") or text.endswith("Alice: how is your day ")
+
+
+def test_dataset_context_window_first_utterance_has_no_prior(tmp_path):
+    """First utterance in a dialogue has empty prefix."""
+    from src.data import XMoFEDataset
+    p = _build_synthetic_dialogue_manifest(tmp_path)
+    ds = XMoFEDataset(p, context_window=5)
+    sample = ds[0]   # dia0_utt0 (first utterance)
+    # No preceding utterances; transcript should be unchanged (no prefix).
+    assert sample["transcript"] == "hi there"
+
+
+def test_dataset_context_window_capped_to_available_history(tmp_path):
+    """Window of 10 on a 1-prior-turn dialogue uses only the one available."""
+    from src.data import XMoFEDataset
+    p = _build_synthetic_dialogue_manifest(tmp_path)
+    ds = XMoFEDataset(p, context_window=10)
+    sample = ds[4]   # dia1_utt1 — only one prior turn (Carol)
+    text = sample["transcript"]
+    assert "Carol: totally agree" in text
+    assert "Alice" not in text   # not even cross-dialogue leakage
+    assert "Bob" not in text
+
+
+def test_dataset_context_window_respects_dialogue_boundary(tmp_path):
+    """Context is scoped to the SAME dialogue id; no leakage across dialogues."""
+    from src.data import XMoFEDataset
+    p = _build_synthetic_dialogue_manifest(tmp_path)
+    ds = XMoFEDataset(p, context_window=5)
+    sample = ds[3]   # dia1_utt0 — first turn in dia1
+    text = sample["transcript"]
+    # Even though dia0 has 3 utterances, none belong to dia1's context.
+    assert "Alice" not in text
+    assert "Bob" not in text
+    assert text == "totally agree"
+
+
+def test_dataset_context_window_silent_no_op_without_dialogue_fields(tmp_path):
+    """When the manifest lacks dialogue_ids (legacy / non-dialogue dataset),
+    context_window > 0 silently degrades to the raw-transcript behaviour."""
+    from src.data import XMoFEDataset
+    p = _build_synthetic_dialogue_manifest(tmp_path, with_dialogue_fields=False)
+    ds = XMoFEDataset(p, context_window=5)
+    sample = ds[2]
+    assert sample["transcript"] == "how is your day"
+
+
+def test_dataset_context_window_propagated_via_make_dataloader(tmp_path):
+    """make_dataloader's context_window arg reaches the dataset."""
+    from src.data import make_dataloader
+    p = _build_synthetic_dialogue_manifest(tmp_path)
+    loader = make_dataloader(p, batch_size=2, shuffle=False, context_window=3)
+    assert loader.dataset.context_window == 3
+
+
 def test_modality_dropout_validation_loader_unaffected(tmp_path):
     """The dropout helper is only called from the train loop. Verify the
     method itself respects mode by not being invoked on val batches; we

@@ -286,16 +286,24 @@ def main() -> None:
     logger.info(f"device={device}  config={config_path}")
 
     # ---- Data --------------------------------------------------------
+    # Dialogue-context window (Lever-2). 0 disables (default for non-dialogue
+    # datasets / legacy runs); MELD configs set this to N>0 to prepend the
+    # preceding N utterances + speaker tags to each sample's transcript.
+    context_window = int(training_cfg.get("context_window", 0))
+    if context_window > 0:
+        logger.info(f"dialogue context_window={context_window} — transcripts will be prefixed with prior turns")
     manifest_dir = REPO_ROOT / config["manifest_dir"]
     train_loader = make_dataloader(
         manifest_dir / "train.pt",
         batch_size=training_cfg["batch_size"], shuffle=True,
         num_workers=training_cfg.get("num_workers", 0),
+        context_window=context_window,
     )
     val_loader = make_dataloader(
         manifest_dir / "val.pt",
         batch_size=training_cfg["batch_size"], shuffle=False,
         num_workers=training_cfg.get("num_workers", 0),
+        context_window=context_window,
     )
     train_dataset = train_loader.dataset
     feature_dims = train_dataset.feature_dims

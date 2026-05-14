@@ -54,10 +54,36 @@ class XMoFEDataset(Dataset):
     only if/when this becomes a bottleneck.
     """
 
-    def __init__(self, manifest_path: str | Path) -> None:
+    def __init__(
+        self,
+        manifest_path: str | Path,
+        context_window: int = 0,
+        context_separator: str = " [SEP] ",
+        context_speaker_format: str = "{speaker}: {text}",
+    ) -> None:
+        """Build the dataset.
+
+        Args:
+            manifest_path: Phase-2 ``<split>.pt`` manifest.
+            context_window: when > 0 AND the manifest carries ``dialogue_ids`` +
+                ``utterance_indices`` (post-``patch_manifests_with_text``), each
+                sample's ``transcript`` is prefixed with the most-recent ``N``
+                preceding utterances from the same dialogue (same split),
+                joined by ``context_separator``. Required for MELD's
+                dialogue-aware modeling (Lever-2). 0 (default) → no prefix.
+            context_separator: token-encoder-friendly separator between
+                contextual utterances. Use a string the tokenizer treats as
+                a real boundary (e.g. ``" [SEP] "`` for ModernBERT / BERT).
+            context_speaker_format: format string for each contextual line.
+                ``{speaker}`` and ``{text}`` are substituted. When a sample
+                lacks a speaker id, the format falls back to ``"{text}"``.
+        """
         manifest_path = Path(manifest_path)
         self.manifest_path = manifest_path
         self.dataset_dir = manifest_path.parent
+        self.context_window = int(context_window)
+        self.context_separator = context_separator
+        self.context_speaker_format = context_speaker_format
 
         self.manifest = torch.load(manifest_path, map_location="cpu", weights_only=False)
         self.caches: dict[str, dict[str, Any]] = {}
@@ -94,6 +120,57 @@ class XMoFEDataset(Dataset):
         first_label = self.rich_labels[0] if self.rich_labels else {}
         self.has_unimodal_labels = all(k in first_label for k in UNIMODAL_LABEL_KEYS)
 
+        # Dialogue-context lookup. When the manifest carries dialogue_ids +
+        # utterance_indices (post-patch), pre-build a sorted index per dialogue
+        # so __getitem__ can fetch the preceding N utterances cheaply. Only
+        # built when ``context_window > 0`` to avoid the overhead for the
+        # frozen-feature path or non-dialogue datasets.
+        self._dialogue_index: dict[str, list[tuple[int, int]]] = {}
+        if (
+            self.context_window > 0
+            and self.has_transcripts
+            and self.dialogue_ids is not None
+            and self.utterance_indices is not None
+        ):
+            for i in range(len(self.sample_ids)):
+                did = self.dialogue_ids[i]
+                uidx = self.utterance_indices[i]
+                if did is None or uidx is None:
+                    continue
+                self._dialogue_index.setdefault(str(did), []).append((int(uidx), i))
+            for did in self._dialogue_index:
+                self._dialogue_index[did].sort()
+
+    def _build_context_prefix(self, sample_idx: int) -> str:
+        """Return the dialogue-context string for the sample at ``sample_idx``.
+
+        Returns an empty string when ``context_window == 0``, no dialogue index
+        is available, or the sample has no prior utterances in its dialogue.
+        """
+        if self.context_window <= 0 or not self._dialogue_index:
+            return ""
+        did = self.dialogue_ids[sample_idx]
+        cur_uidx = self.utterance_indices[sample_idx]
+        if did is None or cur_uidx is None:
+            return ""
+        ordered = self._dialogue_index.get(str(did), ())
+        # All utterances strictly before this one in the same dialogue.
+        prior = [(u, idx) for (u, idx) in ordered if u < int(cur_uidx)]
+        if not prior:
+            return ""
+        window = prior[-self.context_window:]
+        lines: list[str] = []
+        for _, j in window:
+            text = self.transcripts[j] if self.transcripts else ""
+            speaker = (self.speaker_ids[j] if self.speaker_ids else None)
+            if speaker:
+                lines.append(self.context_speaker_format.format(speaker=speaker, text=text))
+            else:
+                lines.append(text)
+        # Append a trailing separator so the current utterance reads as the
+        # last turn of the dialogue when the tokenizer concatenates.
+        return self.context_separator.join(lines) + self.context_separator
+
     @property
     def feature_dims(self) -> dict[str, int]:
         return {m: int(self.manifest["modalities"][m]["feature_dim"]) for m in MODALITIES}
@@ -118,9 +195,24 @@ class XMoFEDataset(Dataset):
                 dtype=torch.float32,
             )
         if self.has_transcripts:
-            item["transcript"] = self.transcripts[idx]
+            raw_transcript = self.transcripts[idx]
+            speaker = self.speaker_ids[idx] if self.speaker_ids is not None else None
+            if self.context_window > 0 and self._dialogue_index:
+                prefix = self._build_context_prefix(idx)
+                if speaker and prefix:
+                    # Tag the current utterance with the speaker so the model
+                    # can attribute the response to the right participant.
+                    current = self.context_speaker_format.format(
+                        speaker=speaker, text=raw_transcript,
+                    )
+                    item["transcript"] = prefix + current
+                else:
+                    item["transcript"] = prefix + raw_transcript
+            else:
+                item["transcript"] = raw_transcript
+
             if self.speaker_ids is not None:
-                item["speaker_id"] = self.speaker_ids[idx]
+                item["speaker_id"] = speaker
             if self.dialogue_ids is not None:
                 item["dialogue_id"] = self.dialogue_ids[idx]
             if self.utterance_indices is not None:
@@ -172,14 +264,20 @@ def make_dataloader(
     pin_memory: bool = False,
     drop_last: bool = False,
     dataset: XMoFEDataset | None = None,
+    context_window: int = 0,
 ) -> DataLoader:
     """Build a ``DataLoader`` for a ``<split>.pt`` manifest.
 
     Pass an existing ``dataset`` to share cached tensors across train/val
     loaders if needed; otherwise the constructor loads them fresh.
+
+    ``context_window > 0`` prepends each sample's transcript with the most
+    recent N preceding utterances from the same dialogue (Lever-2 MELD
+    dialogue context). Quietly a no-op when the manifest lacks the
+    dialogue/utterance index metadata.
     """
     if dataset is None:
-        dataset = XMoFEDataset(manifest_path)
+        dataset = XMoFEDataset(manifest_path, context_window=context_window)
     return DataLoader(
         dataset,
         batch_size=batch_size,
