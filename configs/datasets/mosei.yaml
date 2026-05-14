@@ -53,25 +53,36 @@ video:
 #     128-token cap. Bumped to 512 to keep the tail of long monologues.
 encoder_overrides:
   text:
-    max_length: 512
+    # For utterance-level transcripts (the new default after the prep
+    # refactor), 128 tokens easily covers a single utterance — the 512
+    # cap from the old video-level setup is overkill.
+    max_length: 128
   audio:
     # MOSEI ships pre-extracted COVAREP features instead of raw waveforms,
     # so the audio extractor reads from the CSD instead of running WavLM.
+    # max_frames sized for utterance-level: 30 seconds × 100 Hz = 3000 frames
+    # covers the 99th-percentile utterance and keeps per-sample storage low
+    # (74 dims × 3000 frames × 2 bytes ≈ 450 KB instead of the legacy 900 KB
+    # at 6000 frames).
     source: csd
     csd_path: data/raw/CMU-MOSEI/CMU_MOSEI_COVAREP.csd
     feature_dim: 74
-    sampling_rate: 100        # COVAREP frame rate
-    max_frames: 6000          # cap at 60 seconds; longer videos truncated
+    sampling_rate: 100
+    max_frames: 3000
     encoder_name: covarep
     encoder_source: CMU_MOSEI_COVAREP.csd
   visual:
     # MOSEI ships pre-extracted OpenFace2 features instead of raw videos.
-    # The CSD is 713-dim per frame — far richer than the legacy 35-dim slice
-    # — covering facial landmarks, AUs, gaze, head pose, and HoG descriptors.
+    # The CSD is 713-dim per frame (facial landmarks + AUs + gaze + head
+    # pose + HoG descriptors).
+    # max_frames sized for utterance-level: 30 sec × 30 Hz = 900 frames.
+    # This collapses the per-sample storage from ~5 MB (at 3600 frames) to
+    # ~1.25 MB — vital for fitting the 22.8k-sample utterance cache on disk
+    # (was 117 GB, now ~29 GB at fp16).
     source: csd
     csd_path: data/raw/CMU-MOSEI/CMU_MOSEI_VisualOpenFace2.csd
     feature_dim: 713
-    sampling_rate: 30          # ~video framerate; varies per clip
-    max_frames: 3600           # ~120 sec coverage; p90 of length distribution
+    sampling_rate: 30
+    max_frames: 900
     encoder_name: openface2
     encoder_source: CMU_MOSEI_VisualOpenFace2.csd
