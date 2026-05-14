@@ -199,8 +199,17 @@ class COVAREPSequenceReader:
     def encode(
         self,
         video_ids: Sequence[str],
+        intervals: Sequence[tuple[float, float] | None] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Slice per-video COVAREP sequences keyed by ``video_id``.
+
+        Args:
+            video_ids: per-sample video identifiers.
+            intervals: optional per-sample ``(start_seconds, end_seconds)`` for
+                utterance-level slicing. ``None`` (or a per-sample ``None``)
+                returns the full video's frames. Used to convert the per-video
+                COVAREP sequence into per-utterance slices for the MOSEI
+                utterance-level protocol (~22,856 samples).
 
         Returns:
             features: ``(B, max_frames, 74)`` float tensor.
@@ -208,7 +217,7 @@ class COVAREPSequenceReader:
         """
         chunks: list[np.ndarray] = []
         lengths: list[int] = []
-        for vid in video_ids:
+        for i, vid in enumerate(video_ids):
             try:
                 feats = np.asarray(self._dataset["audio"][vid]["features"], dtype=np.float32)
             except KeyError:
@@ -225,6 +234,19 @@ class COVAREPSequenceReader:
                 if d > 0:
                     fixed[:, :d] = feats[:, :d]
                 feats = fixed
+
+            # Utterance-level slicing: cut the per-video feature array by
+            # [start, end] expressed in seconds, converted to frames at
+            # ``sampling_rate`` (100 Hz for COVAREP).
+            iv = intervals[i] if intervals is not None else None
+            if iv is not None:
+                start_s, end_s = float(iv[0]), float(iv[1])
+                start_f = max(0, int(round(start_s * self.sampling_rate)))
+                end_f = min(feats.shape[0], int(round(end_s * self.sampling_rate)))
+                if end_f > start_f:
+                    feats = feats[start_f:end_f]
+                else:
+                    feats = feats[:0]  # empty interval → empty sample
 
             t = min(feats.shape[0], self.max_frames)
             padded = np.zeros((self.max_frames, self.feature_dim), dtype=np.float32)
