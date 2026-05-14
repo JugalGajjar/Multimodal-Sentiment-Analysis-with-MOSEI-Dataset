@@ -1,0 +1,35 @@
+# CH-SIMS with sigmoid gating (Lever-3) + auxiliary unimodal heads (Lever-4).
+# Here the per-modality heads ARE supervised by real unimodal labels from
+# the CH-SIMS manifest (M_t/M_a/M_v) — this is the "intended" Self-MM
+# multitask setup, not the y_M = y_m^s baseline.
+
+dataset: ch_sims
+manifest_dir: data/processed/ch_sims
+
+model_config: configs/models/xmofe_aux.yaml
+loss_config: configs/training/loss_aux.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 64
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: ch_sims

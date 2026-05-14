@@ -1,0 +1,36 @@
+# X-MoFE + Lever-4 (Self-MM-style auxiliary unimodal heads).
+#
+# Same fusion architecture as xmofe_sigmoid.yaml, but builds three small
+# task-specific heads — one per modality — on top of the pooled
+# representations z_t, z_a, z_v. The composite loss adds an L_unimodal
+# term (weight ε, set in the matching loss config) that supervises each
+# head against either:
+#   * the per-modality column of unimodal_labels (CH-SIMS), or
+#   * the multimodal label y_M (MOSEI/MELD) — the Self-MM y_m^s = y_M
+#     ablation baseline.
+#
+# Combine with Lever-3 sigmoid gating by default since it's strictly an
+# improvement over softmax on every dataset we tested.
+
+name: xmofe_aux
+shared_dim: 256
+attention_heads: 4
+dropout: 0.2
+ffn_multiplier: 4
+
+reliability:
+  mlp_hidden: 256
+  use_quality_features: false
+  num_quality_features: 0
+
+interaction:
+  use_trimodal: true
+  mlp_hidden: 256
+  gating: sigmoid                    # Lever-3 stacked underneath
+
+auxiliary:
+  use_unimodal_heads: true           # Lever-4 toggle
+
+prediction:
+  task: regression
+  num_classes: 1

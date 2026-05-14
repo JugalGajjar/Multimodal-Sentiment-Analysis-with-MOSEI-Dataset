@@ -1,0 +1,30 @@
+# Loss config with the Self-MM auxiliary unimodal term enabled (Lever-4).
+#
+# L_total = L_task + α·L_reliability + β·L_faithfulness + γ·L_stability
+#         + δ·L_entropy + ε·L_unimodal
+#
+# ε is small (0.1) so the per-modality heads provide a regularizing
+# multitask signal without overwhelming the fused task loss. This term
+# is a no-op unless the model was built with use_unimodal_heads=true
+# (see configs/models/xmofe_aux.yaml).
+
+weights:
+  alpha: 0.2
+  beta: 0.3
+  gamma: 0.1
+  delta: 0.05
+  epsilon: 0.1          # Lever-4 — auxiliary unimodal task loss
+
+target_entropy: 0.7
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0

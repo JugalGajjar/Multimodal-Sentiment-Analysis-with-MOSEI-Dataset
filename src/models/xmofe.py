@@ -28,6 +28,7 @@ import torch
 import torch.nn as nn
 
 from src.models.attention_pooling import AttentionPool
+from src.models.auxiliary_heads import UnimodalHeads
 from src.models.explanation_heads import XMoFEOutput
 from src.models.fusion_layers import HybridFusion
 from src.models.interaction import (
@@ -98,6 +99,7 @@ class XMoFE(nn.Module):
         interaction_mlp_hidden: int = 256,
         condition_interaction_on_reliability: bool = False,
         interaction_gating: str = "softmax",
+        use_unimodal_heads: bool = False,
         text_encoder_finetune: bool = False,
         text_encoder_name: str = "answerdotai/ModernBERT-base",
         text_encoder_max_length: int = 128,
@@ -187,6 +189,14 @@ class XMoFE(nn.Module):
         self.fusion = HybridFusion(shared_dim, dropout=dropout, ffn_multiplier=ffn_multiplier)
         self.head = PredictionHead(shared_dim, task=task, num_classes=num_classes, dropout=dropout)
 
+        # Optional per-modality auxiliary heads (Lever-4 / Self-MM style).
+        # Built only when ``use_unimodal_heads=True`` — defaults to None so
+        # the existing single-head pipeline stays bit-identical when off.
+        self.unimodal_heads: UnimodalHeads | None = (
+            UnimodalHeads(shared_dim, task=task, num_classes=num_classes, dropout=dropout)
+            if use_unimodal_heads else None
+        )
+
     @classmethod
     def from_config(
         cls,
@@ -205,6 +215,7 @@ class XMoFE(nn.Module):
         rel = config.get("reliability") or {}
         inter = config.get("interaction") or {}
         text_cfg = config.get("text") or {}
+        aux_cfg = config.get("auxiliary") or {}
         return cls(
             text_dim=text_dim,
             audio_dim=audio_dim,
@@ -223,6 +234,7 @@ class XMoFE(nn.Module):
             interaction_mlp_hidden=inter.get("mlp_hidden", 256),
             condition_interaction_on_reliability=inter.get("condition_on_reliability", False),
             interaction_gating=inter.get("gating", "softmax"),
+            use_unimodal_heads=aux_cfg.get("use_unimodal_heads", False),
             text_encoder_finetune=text_cfg.get("finetune", False),
             text_encoder_name=text_cfg.get("encoder_name", "answerdotai/ModernBERT-base"),
             text_encoder_max_length=text_cfg.get("max_length", 128),
@@ -304,6 +316,15 @@ class XMoFE(nn.Module):
         # 7. Prediction
         prediction = self.head(h_fused)
 
+        # 8. Optional per-modality auxiliary predictions (Lever-4 / Self-MM).
+        # Run only when the model was built with use_unimodal_heads=True.
+        # Each head sees the same pooled embedding (z_m) used by the fusion
+        # path, so the auxiliary gradient flows back through the pooling and
+        # projection — but not through the fusion / interaction modules.
+        unimodal_predictions = None
+        if self.unimodal_heads is not None:
+            unimodal_predictions = self.unimodal_heads(z_t, z_a, z_v)
+
         return XMoFEOutput(
             prediction=prediction,
             reliability=r,
@@ -318,4 +339,5 @@ class XMoFE(nn.Module):
                 if (return_intermediates and self.interaction_names) else None
             ),
             fused=h_fused if return_intermediates else None,
+            unimodal_predictions=unimodal_predictions,
         )

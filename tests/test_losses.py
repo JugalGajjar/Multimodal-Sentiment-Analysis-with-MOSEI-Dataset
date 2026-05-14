@@ -220,11 +220,15 @@ def test_xmofe_loss_composite_classification(cls_model, synthetic_batch, loss_co
     out = cls_model(**inputs)
     total, components = loss_fn(cls_model, synthetic_batch, out)
 
-    assert set(components.keys()) == {"task", "reliability", "faithfulness", "stability", "entropy"}
+    assert set(components.keys()) == {
+        "task", "reliability", "faithfulness", "stability", "entropy", "aux_unimodal",
+    }
     for name, c in components.items():
         assert torch.isfinite(c), f"{name} component is not finite"
     # Reliability should be exactly zero (no unimodal labels in batch)
     assert components["reliability"].item() == 0.0
+    # Aux-unimodal should also be zero — base xmofe.yaml has no aux heads.
+    assert components["aux_unimodal"].item() == 0.0
     assert torch.isfinite(total)
 
 
@@ -292,3 +296,129 @@ def test_xmofe_loss_class_weights_propagate(loss_config):
     loss_fn = XMoFELoss.from_config(loss_config, task="classification", class_weights=weights)
     assert loss_fn.task_loss.criterion.weight is not None
     assert torch.allclose(loss_fn.task_loss.criterion.weight, weights)
+
+
+# ---------------------------------------------------------------------------
+# Lever-4: Self-MM-style auxiliary unimodal heads + L_unimodal
+# ---------------------------------------------------------------------------
+
+
+def test_xmofe_loss_aux_unimodal_inactive_without_heads(cls_model, synthetic_batch, loss_config):
+    """Without aux heads, the unimodal component is zero even when ε > 0."""
+    cfg = {**loss_config, "weights": {**loss_config["weights"], "epsilon": 0.5}}
+    loss_fn = XMoFELoss.from_config(cfg, task="classification")
+    inputs = {k: v for k, v in synthetic_batch.items() if k != "label"}
+    out = cls_model(**inputs)
+    assert out.unimodal_predictions is None
+    _, components = loss_fn(cls_model, synthetic_batch, out)
+    assert components["aux_unimodal"].item() == 0.0
+
+
+def test_xmofe_loss_aux_unimodal_active_with_heads_pseudo_label(synthetic_batch, loss_config):
+    """With aux heads and no unimodal_labels, all three heads are supervised
+    by y_M — the L_unimodal term must be strictly positive."""
+    cfg = {**loss_config, "weights": {**loss_config["weights"], "epsilon": 0.5}}
+    torch.manual_seed(0)
+    model = XMoFE(768, 768, 768, num_classes=7, task="classification", use_unimodal_heads=True)
+    loss_fn = XMoFELoss.from_config(cfg, task="classification")
+    inputs = {k: v for k, v in synthetic_batch.items() if k != "label"}
+    out = model(**inputs)
+    assert out.unimodal_predictions is not None
+    assert set(out.unimodal_predictions.keys()) == {"text", "audio", "visual"}
+    for v in out.unimodal_predictions.values():
+        assert v.shape == out.prediction.shape
+
+    total, components = loss_fn(model, synthetic_batch, out)
+    assert components["aux_unimodal"].item() > 0
+    assert torch.isfinite(total)
+
+
+def test_xmofe_loss_aux_unimodal_uses_per_modality_labels_when_present(loss_config):
+    """CH-SIMS-style batch: per-modality labels in `unimodal_labels` should
+    flow into each head's target instead of the multimodal y_M."""
+    cfg = {**loss_config, "weights": {**loss_config["weights"], "epsilon": 0.5}}
+    torch.manual_seed(0)
+    model = XMoFE(768, 768, 768, num_classes=1, task="regression", use_unimodal_heads=True)
+    loss_fn = XMoFELoss.from_config(cfg, task="regression")
+    batch = {
+        "text": torch.randn(4, 16, 768),
+        "audio": torch.randn(4, 16, 768),
+        "visual": torch.randn(4, 16, 768),
+        "text_length": torch.tensor([16, 16, 16, 16]),
+        "audio_length": torch.tensor([16, 16, 16, 16]),
+        "visual_length": torch.tensor([16, 16, 16, 16]),
+        "label": torch.tensor([0.5, -0.2, 1.0, -1.0]),
+        "unimodal_labels": torch.tensor([
+            [0.5, 0.4, 0.6],
+            [-0.2, 0.1, 0.0],
+            [1.0, 0.8, 0.9],
+            [-1.0, -0.9, -1.0],
+        ]),
+    }
+    inputs = {k: v for k, v in batch.items()
+              if k in ("text", "audio", "visual", "text_length", "audio_length", "visual_length")}
+    out = model(**inputs)
+    _, components = loss_fn(model, batch, out)
+    assert components["aux_unimodal"].item() > 0
+    assert components["reliability"].item() > 0
+
+
+def test_xmofe_loss_total_includes_aux_term(synthetic_batch, loss_config):
+    """Total must equal sum-of-all-six weighted components when aux is on."""
+    cfg = {**loss_config, "weights": {**loss_config["weights"], "epsilon": 0.5}}
+    torch.manual_seed(0)
+    model = XMoFE(768, 768, 768, num_classes=7, task="classification", use_unimodal_heads=True)
+    loss_fn = XMoFELoss.from_config(cfg, task="classification")
+    inputs = {k: v for k, v in synthetic_batch.items() if k != "label"}
+    torch.manual_seed(7)
+    out = model(**inputs)
+    torch.manual_seed(7)
+    total, components = loss_fn(model, synthetic_batch, out)
+    expected = (
+        components["task"]
+        + loss_fn.alpha * components["reliability"]
+        + loss_fn.beta * components["faithfulness"]
+        + loss_fn.gamma * components["stability"]
+        + loss_fn.delta * components["entropy"]
+        + loss_fn.epsilon * components["aux_unimodal"]
+    )
+    assert torch.allclose(total, expected, atol=1e-5)
+
+
+def test_xmofe_loss_aux_backward_reaches_unimodal_heads(synthetic_batch, loss_config):
+    """Gradient must flow into each per-modality auxiliary head when ε > 0."""
+    cfg = {**loss_config, "weights": {**loss_config["weights"], "epsilon": 0.5}}
+    torch.manual_seed(0)
+    model = XMoFE(768, 768, 768, num_classes=7, task="classification", use_unimodal_heads=True)
+    loss_fn = XMoFELoss.from_config(cfg, task="classification")
+    inputs = {k: v for k, v in synthetic_batch.items() if k != "label"}
+    out = model(**inputs)
+    total, _ = loss_fn(model, synthetic_batch, out)
+    model.zero_grad()
+    total.backward()
+    for modality in ("text", "audio", "visual"):
+        params = list(model.unimodal_heads.heads[modality].parameters())
+        assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in params), (
+            f"No gradient reached the {modality} aux head"
+        )
+
+
+def test_xmofe_from_config_reads_aux_flag():
+    """``auxiliary.use_unimodal_heads: true`` in YAML must instantiate heads."""
+    cfg = {
+        "name": "xmofe_aux",
+        "shared_dim": 64,
+        "attention_heads": 2,
+        "dropout": 0.1,
+        "ffn_multiplier": 2,
+        "reliability": {"mlp_hidden": 32, "use_quality_features": False, "num_quality_features": 0},
+        "interaction": {"use_trimodal": True, "mlp_hidden": 32, "gating": "sigmoid"},
+        "auxiliary": {"use_unimodal_heads": True},
+        "prediction": {"task": "regression", "num_classes": 1},
+    }
+    model = XMoFE.from_config(cfg, text_dim=64, audio_dim=64, visual_dim=64, task="regression")
+    assert model.unimodal_heads is not None
+    # Default off when flag absent.
+    cfg_off = {**cfg, "auxiliary": {}}
+    model_off = XMoFE.from_config(cfg_off, text_dim=64, audio_dim=64, visual_dim=64, task="regression")
+    assert model_off.unimodal_heads is None

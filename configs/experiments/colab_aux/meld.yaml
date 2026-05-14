@@ -1,0 +1,35 @@
+# MELD with sigmoid gating (Lever-3) + dialogue context (Lever-2)
+# + auxiliary unimodal heads (Lever-4) — all four levers stacked.
+# Pseudo-label y_m^s = y_M (no per-modality emotion labels in MELD).
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe_aux.yaml
+loss_config: configs/training/loss_aux.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 32
+  num_epochs: 25
+  num_workers: 0
+  precision: bf16
+  context_window: 3            # Lever-2 — keep dialogue context on
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld

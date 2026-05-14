@@ -24,7 +24,16 @@ from src.models.explanation_heads import XMoFEOutput
 
 
 class XMoFELoss(nn.Module):
-    """``L_total = L_task + α·L_reliability + β·L_faithfulness + γ·L_stability + δ·L_entropy``."""
+    """``L_total = L_task + α·L_reliability + β·L_faithfulness + γ·L_stability + δ·L_entropy + ε·L_unimodal``.
+
+    The ``L_unimodal`` term (weight ``epsilon``, default 0) is the Self-MM
+    auxiliary-multitask loss: each modality's per-modality head is trained
+    against per-sample pseudo-labels ``y_m^s``. When ``unimodal_labels`` is
+    in the batch (CH-SIMS), those real labels are used; otherwise the
+    multimodal label ``y_M`` is used as a pseudo-label (the Self-MM
+    ``y_m^s = y_M`` baseline). Active only when the model carries
+    ``unimodal_heads`` (i.e. was built with ``use_unimodal_heads=True``).
+    """
 
     def __init__(
         self,
@@ -33,6 +42,7 @@ class XMoFELoss(nn.Module):
         beta: float = 0.3,
         gamma: float = 0.1,
         delta: float = 0.05,
+        epsilon: float = 0.0,
         target_entropy: float = 0.7,
         similarity_temperature: float = 1.0,
         classification_metric: str = "kl",
@@ -48,8 +58,12 @@ class XMoFELoss(nn.Module):
         self.beta = float(beta)
         self.gamma = float(gamma)
         self.delta = float(delta)
+        self.epsilon = float(epsilon)
 
         self.task_loss = TaskLoss(task, class_weights=class_weights)
+        # Per-modality auxiliary heads share the same task + class-weights
+        # as the main head, so we reuse a single TaskLoss instance.
+        self.aux_unimodal_loss = TaskLoss(task, class_weights=class_weights)
         self.reliability_loss = ReliabilityLoss(similarity_temperature)
         self.faithfulness_loss = FaithfulnessLoss(
             task,
@@ -80,6 +94,7 @@ class XMoFELoss(nn.Module):
             beta=weights.get("beta", 0.3),
             gamma=weights.get("gamma", 0.1),
             delta=weights.get("delta", 0.05),
+            epsilon=weights.get("epsilon", 0.0),
             target_entropy=config.get("target_entropy", 0.7),
             similarity_temperature=rel.get("similarity_temperature", 1.0),
             classification_metric=faith.get("classification_metric", "kl"),
@@ -130,11 +145,39 @@ class XMoFELoss(nn.Module):
         else:
             components["reliability"] = zero
 
+        # ----- Self-MM-style auxiliary unimodal-task loss (Lever 4) --------
+        #
+        # Only fires when the model carries auxiliary heads (so the output
+        # dict has unimodal_predictions) AND the weight is positive. Each
+        # modality's prediction is compared against either:
+        #   * the per-modality column of ``unimodal_labels`` (CH-SIMS, real
+        #     unimodal annotations), or
+        #   * the multimodal ``y_M`` itself (MOSEI/MELD pseudo-label
+        #     baseline equivalent to the Self-MM ``y_m^s = y_M`` ablation).
+        # Centroid-based momentum-updated pseudo-labels (Self-MM Eq. 8) can
+        # be added on top via a trainer-level hook; this loss term is the
+        # structural prerequisite.
+        if self.epsilon > 0 and clean_output.unimodal_predictions is not None:
+            modality_preds = clean_output.unimodal_predictions
+            term = clean_output.prediction.new_zeros(())
+            for i, m in enumerate(("text", "audio", "visual")):
+                if m not in modality_preds:
+                    continue
+                if unimodal is not None and unimodal.shape[-1] > i:
+                    target_m = unimodal[:, i]
+                else:
+                    target_m = batch["label"]
+                term = term + self.aux_unimodal_loss(modality_preds[m], target_m)
+            components["aux_unimodal"] = term / 3.0
+        else:
+            components["aux_unimodal"] = zero
+
         total = (
             components["task"]
             + self.alpha * components["reliability"]
             + self.beta * components["faithfulness"]
             + self.gamma * components["stability"]
             + self.delta * components["entropy"]
+            + self.epsilon * components["aux_unimodal"]
         )
         return total, components

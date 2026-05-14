@@ -46,6 +46,14 @@ class XMoFEOutput:
     fused: torch.Tensor | None = None
     """Optional ``(B, D)`` fused representation passed to the prediction head."""
 
+    unimodal_predictions: Mapping[str, torch.Tensor] | None = None
+    """Optional per-modality task predictions from Self-MM-style auxiliary heads.
+
+    Keys are ``"text"``, ``"audio"``, ``"visual"``; each value has the same
+    shape as ``prediction``. Populated only when the model was built with
+    ``use_unimodal_heads=True`` (Lever-4); ``None`` otherwise.
+    """
+
     def detach(self) -> "XMoFEOutput":
         """Return a copy with every tensor detached and on the same device."""
         return XMoFEOutput(
@@ -63,4 +71,8 @@ class XMoFEOutput:
                 if self.interaction_vectors is not None else None
             ),
             fused=self.fused.detach() if self.fused is not None else None,
+            unimodal_predictions=(
+                {k: v.detach() for k, v in self.unimodal_predictions.items()}
+                if self.unimodal_predictions is not None else None
+            ),
         )
