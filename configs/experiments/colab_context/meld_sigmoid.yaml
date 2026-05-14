@@ -1,0 +1,35 @@
+# MELD with both Lever-2 (dialogue context) and Lever-3 (sigmoid gating).
+# The "everything turned on" recipe for MELD — should hit closest to
+# M2FNet 0.667 SOTA among our configurations.
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe_sigmoid.yaml   # Lever-3 — sigmoid gating
+loss_config: configs/training/loss.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 32
+  num_epochs: 25
+  num_workers: 0
+  precision: bf16
+  context_window: 3            # Lever-2 — 3-turn dialogue context
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld

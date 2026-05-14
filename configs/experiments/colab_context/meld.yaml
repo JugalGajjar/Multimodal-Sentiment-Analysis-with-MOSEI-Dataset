@@ -1,0 +1,43 @@
+# MELD with Lever-2 dialogue context (3 preceding utterances + speaker tags).
+#
+# Each sample's transcript is prefixed with the most recent 3 turns in the
+# same dialogue, tagged with each speaker's name and separated by [SEP].
+# This matches the structural strength of DialogueRNN/GCN/COSMIC/EmoBERTa
+# /TODKAT/EmotionFlow/M2FNet (all of which use conversation context), while
+# keeping X-MoFE's audio/visual paths per-utterance.
+#
+# Drops batch to 32 because contextualized transcripts can hit ~300-500
+# tokens vs ~30-50 for the un-contextualized version, so encoder forward
+# is heavier per sample.
+
+dataset: meld
+manifest_dir: data/processed/meld
+
+model_config: configs/models/xmofe.yaml
+loss_config: configs/training/loss.yaml
+
+task: classification
+num_classes: 7
+
+training:
+  batch_size: 32
+  num_epochs: 25
+  num_workers: 0
+  precision: bf16
+  context_window: 3            # Lever-2: prepend 3 prior turns
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: weighted_f1
+    mode: max
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: meld
