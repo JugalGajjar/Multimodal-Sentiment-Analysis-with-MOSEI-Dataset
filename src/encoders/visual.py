@@ -271,8 +271,15 @@ class OpenFace2SequenceReader:
     def encode(
         self,
         video_ids: Sequence[str],
+        intervals: Sequence[tuple[float, float] | None] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Slice per-video OpenFace2 sequences keyed by ``video_id``.
+
+        Args:
+            video_ids: per-sample video identifiers.
+            intervals: optional per-sample ``(start_seconds, end_seconds)`` for
+                utterance-level slicing. ``None`` returns the full video.
+                Used for MOSEI utterance-level (~22,856 samples).
 
         Returns:
             features: ``(B, max_frames, feature_dim)`` float tensor.
@@ -280,7 +287,7 @@ class OpenFace2SequenceReader:
         """
         chunks: list[np.ndarray] = []
         lengths: list[int] = []
-        for vid in video_ids:
+        for i, vid in enumerate(video_ids):
             try:
                 feats = np.asarray(self._dataset["visual"][vid]["features"], dtype=np.float32)
             except KeyError:
@@ -299,6 +306,17 @@ class OpenFace2SequenceReader:
                 if d > 0:
                     fixed[:, :d] = feats[:, :d]
                 feats = fixed
+
+            # Utterance-level slicing in seconds → frames at ``sampling_rate``.
+            iv = intervals[i] if intervals is not None else None
+            if iv is not None and feats.ndim == 2:
+                start_s, end_s = float(iv[0]), float(iv[1])
+                start_f = max(0, int(round(start_s * self.sampling_rate)))
+                end_f = min(feats.shape[0], int(round(end_s * self.sampling_rate)))
+                if end_f > start_f:
+                    feats = feats[start_f:end_f]
+                else:
+                    feats = feats[:0]
 
             if self.normalize and feats.shape[0] > 0:
                 feats = (feats - self.mean) / self.std
