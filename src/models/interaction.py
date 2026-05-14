@@ -107,18 +107,30 @@ class TriModalInteraction(nn.Module):
         return c
 
 
+VALID_GATING = ("softmax", "sigmoid")
+
+
 class InteractionEstimator(nn.Module):
-    """``λ = softmax(MLP_I([c_TA; c_TV; c_AV; c_TAV; r?]))`` — interaction-level explanation.
+    """Interaction-level explanation weights ``λ``.
+
+    Two gating modes:
+
+    * **``softmax``** (default, original behaviour): ``λ = softmax(MLP_I(...))``.
+      Sums to 1 across interactions. Forces a zero-sum competition between
+      the pairwise (``c_TA``, ``c_TV``, ``c_AV``) and trimodal (``c_TAV``)
+      pathways. In practice this **collapses to ~99.95% on the trimodal
+      term** during X-MoFE training — the model effectively bypasses the
+      pairwise interactions entirely.
+
+    * **``sigmoid``**: ``λ = σ(MLP_I(...))``. Each interaction gets an
+      independent gate in ``[0, 1]``; no zero-sum constraint. The model
+      can use multiple pathways together at full strength without the
+      softmax-induced collapse. Recommended replacement for production
+      training; preserves softmax for ablation studies.
 
     When ``condition_on_reliability=True``, the per-modality reliability
-    vector ``r ∈ R^3`` is concatenated to the interaction-vector input
-    before the MLP. This lets the interaction weights ``λ`` adapt based
-    on which modalities are reliable: e.g. if text is unreliable, the
-    estimator can downweight every interaction involving text
-    (``c_TA``, ``c_TV``, ``c_TAV``).
-
-    Backwards-compatible: leaving the flag at its default ``False``
-    reproduces the original behaviour exactly.
+    ``r ∈ R^3`` is concatenated to the MLP input before gating so ``λ``
+    can adapt to per-sample modality reliability.
     """
 
     NUM_RELIABILITY_INPUTS = 3   # text, audio, visual
@@ -130,10 +142,16 @@ class InteractionEstimator(nn.Module):
         mlp_hidden: int = 256,
         dropout: float = 0.2,
         condition_on_reliability: bool = False,
+        gating: str = "softmax",
     ) -> None:
         super().__init__()
+        if gating not in VALID_GATING:
+            raise ValueError(
+                f"gating must be one of {VALID_GATING}; got {gating!r}"
+            )
         self.num_interactions = num_interactions
         self.condition_on_reliability = condition_on_reliability
+        self.gating = gating
         input_dim = shared_dim * num_interactions
         if condition_on_reliability:
             input_dim += self.NUM_RELIABILITY_INPUTS
@@ -168,4 +186,8 @@ class InteractionEstimator(nn.Module):
                     f"got shape {tuple(reliability.shape)}"
                 )
             x = torch.cat([x, reliability], dim=-1)
-        return F.softmax(self.mlp(x), dim=-1)
+        logits = self.mlp(x)
+        if self.gating == "softmax":
+            return F.softmax(logits, dim=-1)
+        # sigmoid — each interaction independent in [0, 1]
+        return torch.sigmoid(logits)
