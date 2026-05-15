@@ -1,0 +1,26 @@
+# X-MoFE with auxiliary unimodal heads (Lever-4 on) but softmax interaction
+# gating (Lever-3 OFF). Used for the L3-leave-one-out ablation in the
+# training matrix.
+
+name: xmofe_aux_softmax
+shared_dim: 256
+attention_heads: 4
+dropout: 0.2
+ffn_multiplier: 4
+
+reliability:
+  mlp_hidden: 256
+  use_quality_features: false
+  num_quality_features: 0
+
+interaction:
+  use_trimodal: true
+  mlp_hidden: 256
+  gating: softmax                    # Lever-3 disabled
+
+auxiliary:
+  use_unimodal_heads: true           # Lever-4 still on
+
+prediction:
+  task: regression
+  num_classes: 1

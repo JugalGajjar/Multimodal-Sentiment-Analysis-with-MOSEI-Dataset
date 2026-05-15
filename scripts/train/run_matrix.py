@@ -17,7 +17,13 @@ The matrix:
     Tier 2: 6 fusion baselines x 1 seed x 3 ds   = 18 runs
     Tier 3: 3 architectural ablations x 1 x 3 ds =  9 runs
     Tier 4: 4 loss ablations (chsims-only repl.) = 10 runs
-                                              total ≈ 46 runs
+    Tier 5: lever leave-one-out (L2/L3/L4)       =  7 runs
+                                              total ≈ 53 runs
+
+Tier 5 is the "lever ablation" row of the headline result table: it
+re-trains all-levers minus one lever at a time so we can attribute the
+gain to each lever independently. L1 (utterance-level MOSEI) is not
+leave-one-outable post-hoc — see notes in the paper.
 
 Examples
 --------
@@ -107,10 +113,12 @@ def make_matrix() -> list[dict]:
             })
 
     # Tier 4: Loss ablations --------------------------------------------
-    # faithfulness/stability/entropy: full set (3 datasets each).
-    for loss_name in ("loss_no_faithfulness", "loss_no_stability", "loss_no_entropy"):
+    # faithfulness/stability/entropy: full set (3 datasets each). Uses the
+    # aux-aware loss configs so the Lever-4 baseline stays constant — only
+    # the named loss term is zeroed out.
+    for loss_name in ("loss_aux_no_faithfulness", "loss_aux_no_stability", "loss_aux_no_entropy"):
         for ds in DATASETS:
-            tag = loss_name.replace("loss_", "")  # "no_faithfulness"
+            tag = loss_name.replace("loss_aux_", "")  # "no_faithfulness"
             runs.append({
                 "tier": 4,
                 "dataset": ds,
@@ -127,18 +135,49 @@ def make_matrix() -> list[dict]:
         "dataset": "ch_sims",
         "variant": "xmofe",
         "modality": None,
-        "loss_config": "configs/training/loss_no_reliability.yaml",
+        "loss_config": "configs/training/loss_aux_no_reliability.yaml",
         "seed": 0,
         "run_name": "ch_sims_xmofe_no_reliability_loss_s0",
     })
+
+    # Tier 5: Lever leave-one-out ---------------------------------------
+    # Each lever's contribution is isolated by re-training the full stack
+    # minus that single lever. L1 is excluded — it changes the test set
+    # (video-level n=3,225 vs utt-level n=22,856), so a leave-one-out is
+    # not apples-to-apples. L2 is MELD-only (it's the dialogue-context
+    # lever and the other datasets aren't dialogue-structured).
+    # Each entry overrides the experiment prefix so the matrix script
+    # loads the matching `colab_aux_minus_L<n>/<ds>.yaml` instead of the
+    # full-stack `colab_aux/<ds>.yaml`.
+    LEVERS = [
+        ("L2", ("meld",)),                       # dialogue context (MELD only)
+        ("L3", DATASETS),                        # sigmoid gating
+        ("L4", DATASETS),                        # auxiliary unimodal heads
+    ]
+    for lever, datasets in LEVERS:
+        for ds in datasets:
+            runs.append({
+                "tier": 5,
+                "dataset": ds,
+                "variant": "xmofe",
+                "modality": None,
+                "loss_config": None,
+                "seed": 0,
+                "run_name": f"{ds}_xmofe_minus_{lever}_s0",
+                "experiment_prefix_override": f"colab_aux_minus_{lever}",
+            })
 
     return runs
 
 
 def build_command(entry: dict, *, experiment_prefix: str, no_wandb: bool) -> list[str]:
     """Construct the train_xmofe.py CLI command for an entry."""
+    # Tier-5 entries override the prefix so we can point at
+    # `colab_aux_minus_L<n>/` while the rest of the matrix uses
+    # `colab_aux/`.
+    effective_prefix = entry.get("experiment_prefix_override") or experiment_prefix
     experiment = (
-        f"{experiment_prefix}/{entry['dataset']}" if experiment_prefix
+        f"{effective_prefix}/{entry['dataset']}" if effective_prefix
         else entry["dataset"]
     )
     cmd = [
@@ -168,8 +207,8 @@ def main() -> int:
     parser.add_argument("--experiment-prefix", default="colab",
                         help="Subdir under configs/experiments/ (e.g. 'colab' loads colab/<dataset>.yaml). "
                         "Pass empty string to use the base configs (M4 Pro).")
-    parser.add_argument("--tiers", type=int, nargs="+", default=[1, 2, 3, 4],
-                        choices=[1, 2, 3, 4],
+    parser.add_argument("--tiers", type=int, nargs="+", default=[1, 2, 3, 4, 5],
+                        choices=[1, 2, 3, 4, 5],
                         help="Which tiers to run (default: all).")
     parser.add_argument("--datasets", nargs="+", default=list(DATASETS),
                         choices=list(DATASETS),

@@ -1,0 +1,32 @@
+# CH-SIMS all-levers MINUS Lever-3 (softmax gating instead of sigmoid).
+
+dataset: ch_sims
+manifest_dir: data/processed/ch_sims
+
+model_config: configs/models/xmofe_aux_softmax.yaml
+loss_config: configs/training/loss_aux.yaml
+
+task: regression
+num_classes: 1
+
+training:
+  batch_size: 64
+  num_epochs: 30
+  num_workers: 0
+  precision: bf16
+  optimizer:
+    name: adamw
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: cosine
+  gradient_clip: 1.0
+  log_every: 50
+  early_stopping:
+    metric: mae
+    mode: min
+    patience: 5
+
+run:
+  project: xmofe
+  name_prefix: ch_sims

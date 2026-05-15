@@ -1,0 +1,23 @@
+# Loss config for Tier-4 ablation: all-levers minus L_reliability (α=0).
+# Only meaningful on CH-SIMS (the only dataset with per-modality labels).
+
+weights:
+  alpha: 0.0          # ABLATED
+  beta: 0.3
+  gamma: 0.1
+  delta: 0.05
+  epsilon: 0.1
+
+target_entropy: 0.7
+
+faithfulness:
+  classification_metric: kl
+  detach_target: true
+
+stability:
+  text_token_dropout: 0.1
+  audio_noise_std: 0.1
+  visual_patch_dropout: 0.1
+
+reliability_supervision:
+  similarity_temperature: 1.0
