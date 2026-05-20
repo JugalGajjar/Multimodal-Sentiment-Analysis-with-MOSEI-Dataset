@@ -70,20 +70,22 @@ class Evaluator:
         all_reliability: list[torch.Tensor] = []
         all_interactions: list[torch.Tensor] = []
 
+        # Only forward raw transcripts to models that carry an in-graph text
+        # encoder (XMoFE with text.finetune=true). Baselines and unimodal
+        # heads have a strict forward signature that rejects this kwarg.
+        allowed_keys = {
+            "text", "audio", "visual",
+            "text_length", "audio_length", "visual_length",
+            "quality",
+        }
+        if getattr(model, "text_encoder", None) is not None:
+            allowed_keys.add("transcripts")
+
         for batch in dataloader:
             inputs = {
                 k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
-                if k in {
-                    "text", "audio", "visual",
-                    "text_length", "audio_length", "visual_length",
-                    "quality",
-                    # Phase-1 fine-tuning: when the model owns a trainable text
-                    # encoder, it consumes raw transcripts in-graph at val/test
-                    # time too. Without this key being forwarded the fine-tuned
-                    # model would silently fall back to stale cached features.
-                    "transcripts",
-                }
+                if k in allowed_keys
             }
             out = model(**inputs)
             all_preds.append(out.prediction.detach().to("cpu"))

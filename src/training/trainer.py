@@ -158,8 +158,13 @@ class Trainer:
             "text", "audio", "visual",
             "text_length", "audio_length", "visual_length",
             "quality",
-            "transcripts",   # raw text for in-graph fine-tuning (Phase 1)
         }
+        # Raw transcripts are only consumed by models that own an in-graph
+        # text encoder (XMoFE with text.finetune=true). The controlled-fusion
+        # baselines and unimodal heads reject unknown kwargs, so we must not
+        # forward this key to them.
+        if getattr(self.model, "text_encoder", None) is not None:
+            keys.add("transcripts")
         return {k: v for k, v in batch.items() if k in keys}
 
     _MODALITY_NAMES = ("text", "audio", "visual")
