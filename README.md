@@ -9,7 +9,7 @@ those explanations are faithful to the model's actual sensitivity.
 
 ---
 
-## Key ideas
+<!-- ## Key ideas
 
 - **Frozen modern unimodal encoders** — text: ModernBERT-base, audio: WavLM Base+, visual: VideoMAEv2-base. The learnable contribution is the fusion architecture, not encoder fine-tuning.
 - **Sample-wise modality reliability** — a reliability estimator predicts how much each modality should be trusted for a given sample.
@@ -126,7 +126,7 @@ The project is intentionally compute-aware. Available hardware:
 
 Strategy: freeze all encoders, cache features once per dataset, train only fusion + explanation modules, run 3 seeds for the final X-MoFE and key controlled variants (1 seed elsewhere), and use VLMs as inference-only baselines on stratified subsets.
 
----
+--- -->
 
 ## Legacy work
 
